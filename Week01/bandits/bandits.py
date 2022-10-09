@@ -1,3 +1,5 @@
+# TODO: Add Recodex IDs.
+
 #!/usr/bin/env python3
 import argparse
 
@@ -37,20 +39,26 @@ parser.add_argument("--seed", default=42, type=int, help="Random seed.")
 
 
 def main(env: MultiArmedBandits, args: argparse.Namespace) -> float:
-    # TODO: Initialize the estimates for all bandits, to `args.initial`.
-
+    current_estimates = np.full(args.bandits, fill_value=args.initial, dtype=float)
+    current_hit_counts = np.zeros(args.bandits, dtype=int)
     rewards = 0
     for step in range(args.episode_length):
-        # TODO: Select either a greedy action (if `env.greedy(args.epsilon)` is True)
-        # or uniformly random action (otherwise).
-        action = ...
+        if env.greedy(args.epsilon):
+            action = np.random.choice(np.flatnonzero(current_estimates == current_estimates.max()))  # Break ties.
+            # action = np.argmax(current_estimates)
+        else:
+            action = np.random.randint(0, args.bandits)
 
         # Perform the action.
         reward = env.step(action)
+        current_hit_counts[action] += 1
         rewards += reward
 
-        # TODO: Update parameters, either using averaging (when `args.alpha` == 0)
-        # or by an update with a learning rate of `args.alpha`.
+        difference = reward - current_estimates[action]
+        if args.alpha == 0:  # Averaging.
+            current_estimates[action] += (1 / current_hit_counts[action]) * difference
+        else:  # Learning rate.
+            current_estimates[action] += args.alpha * difference
 
     return rewards / args.episode_length
 
