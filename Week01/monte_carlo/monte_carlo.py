@@ -1,4 +1,15 @@
 #!/usr/bin/env python3
+#
+# Team members:
+# Dominik Chodounský
+# Martin Lank
+# Juraj Kmec
+#
+# ReCodExIDs:
+# 882a1f6f-99a2-48df-aee6-1b62d6d0d2df
+# #TODO
+# #TODO
+
 import argparse
 
 import gym
