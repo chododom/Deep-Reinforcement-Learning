@@ -1,6 +1,15 @@
-# TODO: Add Recodex IDs.
-
 #!/usr/bin/env python3
+#
+# Team members:
+# Juraj Kmec
+# Martin Lank
+# Dominik Chodounský
+# 
+# ReCodExIDs:
+# b503f10b-77cf-41be-a787-371a69cfa66a
+# #TODO
+# 882a1f6f-99a2-48df-aee6-1b62d6d0d2df
+
 import argparse
 
 import numpy as np
