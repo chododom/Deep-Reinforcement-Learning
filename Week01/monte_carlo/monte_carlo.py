@@ -24,7 +24,7 @@ parser.add_argument("--render_each", default=0, type=int, help="Render some epis
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
 parser.add_argument("--episodes", default=5000, type=int, help="Training episodes.")
-parser.add_argument("--epsilon", default=0.05, type=float, help="Exploration factor.")
+parser.add_argument("--epsilon", default=0.1, type=float, help="Exploration factor.")
 parser.add_argument("--gamma", default=1, type=float, help="Discount factor.")
 
 
