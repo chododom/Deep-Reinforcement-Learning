@@ -1,4 +1,15 @@
 #!/usr/bin/env python3
+#
+# Team members:
+# Dominik Chodounský
+# Martin Lank
+# Juraj Kmec
+#
+# ReCodExIDs:
+# 882a1f6f-99a2-48df-aee6-1b62d6d0d2df
+# b503f10b-77cf-41be-a787-371a69cfa66a
+# 8c8b5f62-9f3e-4825-9966-185987537e3f
+
 import argparse
 
 import numpy as np
