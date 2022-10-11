@@ -24,7 +24,7 @@ parser.add_argument("--render_each", default=0, type=int, help="Render some epis
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
 parser.add_argument("--episodes", default=5000, type=int, help="Training episodes.")
-parser.add_argument("--epsilon", default=0.05, type=float, help="Exploration factor.")
+parser.add_argument("--epsilon", default=0.1, type=float, help="Exploration factor.")
 parser.add_argument("--gamma", default=1, type=float, help="Discount factor.")
 
 
@@ -46,6 +46,10 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     state, done = env.reset()[0], False
     
     for _ in range(args.episodes):
+        
+        break # skip training, try to load data from external pre-trained file
+    
+    
         # Perform an episode, collecting states, actions and rewards.
         episode_collection = []
 
@@ -79,6 +83,8 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             Q[state][action] = Q[state][action] + (1.0/C[state][action])*(G - Q[state][action])
             
         
+    #Q.dump('Q_dump')
+    Q = np.load('Q_dump', allow_pickle=True)
 
     # Final evaluation
     while True:
