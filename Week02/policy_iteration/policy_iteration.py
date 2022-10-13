@@ -58,24 +58,62 @@ parser.add_argument("--steps", default=10, type=int, help="Number of policy eval
 
 
 def argmax_with_tolerance(x: np.ndarray, axis: int = -1) -> np.ndarray:
-    """Argmax with small tolerance, choosing the value with smallest index on ties"""
+    """ Argmax with small tolerance, choosing the value with smallest index on ties """
     x = np.asarray(x)
     return np.argmax(x + 1e-6 >= np.max(x, axis=axis, keepdims=True), axis=axis)
+
+
+def find_best_action(state, value_function, args):
+    sums = []
+    for action in range(len(GridWorld.actions)):
+        sum_a = 0
+        outcomes = GridWorld.step(state, action)
+        
+        for next_action in outcomes:
+            probability = next_action[0]
+            reward = next_action[1]
+            next_state = next_action[2]
+
+            sum_a += probability * (reward + args.gamma * value_function[next_state])
+        
+        sums.append(sum_a)
+
+    return argmax_with_tolerance(sums)
 
 
 def main(args: argparse.Namespace) -> tuple[list[float], list[int]]:
     # Start with zero value function and "go North" policy
     value_function = [0.0] * GridWorld.states
     policy = [0] * GridWorld.states
+    
+    for step in range(args.steps):
+        # Policy evaluation
+        for iteration in range(args.iterations):    
+            for state in range(GridWorld.states):                     
+                outcomes = GridWorld.step(state, policy[state])
 
-    # TODO: Implement policy iteration algorithm, with `args.steps` steps of
-    # policy evaluation/policy improvement. During policy evaluation, use the
-    # current value function and perform `args.iterations` applications of the
-    # Bellman equation. Perform the policy evaluation asynchronously (i.e., update
-    # the value function in-place for states 0, 1, ...). During the policy
-    # improvement, use the `argmax_with_tolerance` to choose the best action.
+                new_value = 0
 
-    # TODO: The final value function should be in `value_function` and final greedy policy in `policy`.
+                # Loop over all possible following scenarios
+                for action in range(len(outcomes)):
+                    probability = outcomes[action][0]
+                    reward = outcomes[action][1]
+                    next_state = outcomes[action][2]                    
+                    new_value += probability * (reward + args.gamma * value_function[next_state]) 
+                    
+                value_function[state] = new_value
+    
+        
+        # Policy improvement
+        policy_stable = True
+        for state in range(GridWorld.states):
+            old_action = policy[state]
+            policy[state] = find_best_action(state, value_function, args)
+            if old_action != policy[state]:
+                policy_stable = False
+                    
+
+    # The final value function should be in `value_function` and final greedy policy in `policy`.
     return value_function, policy
 
 
