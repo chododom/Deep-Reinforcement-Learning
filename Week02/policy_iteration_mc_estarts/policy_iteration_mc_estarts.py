@@ -82,7 +82,7 @@ def main(args: argparse.Namespace) -> tuple[list[float], list[int]]:
     action_value_function = np.zeros((env.states, len(env.actions)))
     policy = np.zeros(env.states, np.int32)
 
-    # TODO: Implement a variant of policy iteration algorithm, with
+    # Implement a variant of policy iteration algorithm, with
     # `args.steps` steps of policy evaluation/policy improvement. During policy
     # evaluation, estimate action-value function by Monte Carlo simulation:
     # - for start_state in range(env.states):
@@ -90,7 +90,7 @@ def main(args: argparse.Namespace) -> tuple[list[float], list[int]]:
     #     - start in the given start_state-start_action pair
     #     - perform `args.mc_length` Monte Carlo steps, utilizing greedy
     #       action with respect to the policy (apart from the first step,
-    #       where the action is pre-definted)
+    #       where the action is pre-defined)
     #     - compute the return of the whole simulation
     #     - update the action-value function at the (start_state, start_action)
     #       pair, considering the simulation return as its estimate, by averaging
@@ -99,12 +99,35 @@ def main(args: argparse.Namespace) -> tuple[list[float], list[int]]:
     # After completing the policy_evaluation step (i.e., after updating estimates
     # of all state-action pairs), perform the policy improvement, using the
     # `argmax_with_tolerance` to choose the best action.
+    for step in range(args.steps):
+        # Policy evaluation:
+        for start_state in range(env.states):
+            for start_action in range(len(env.actions)):
+                reward, state = env.step(start_state, start_action)
+                rewards = [reward]
+                for mc_step in range(args.mc_length - 1):
+                    action = policy[state]
+                    reward, state = env.step(state, action)
+                    rewards.append(reward)
+                return_ = 0
+                for reward in reversed(rewards):
+                    return_ = args.gamma * return_ + reward
+                # Sequential average:
+                previous_estimate = action_value_function[start_state, start_action]
+                action_value_function[start_state, start_action] += 1 / (step + 1) * (return_ - previous_estimate)
 
-    # TODO: Compute `value_function` by taking the value from
+        # Policy improvement:
+        for state in range(env.states):
+            policy[state] = argmax_with_tolerance(action_value_function[state])
+
+    # Compute `value_function` by taking the value from
     # `action_value_function` according to the computed policy.
-    value_function = None
-
-    return value_function, policy
+    # value_function = np.mean(action_value_function, axis=1)
+    value_function = [
+        action_value_function[state, policy[state]]
+        for state in range(env.states)
+    ]
+    return value_function, policy.tolist()
 
 
 if __name__ == "__main__":
