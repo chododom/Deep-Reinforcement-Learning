@@ -82,8 +82,9 @@ def main(args: argparse.Namespace) -> tuple[list[float], list[int]]:
     # Start with zero action-value function and "go North" policy
     action_value_function = np.zeros((env.states, len(env.actions)))
     policy = np.zeros(env.states, np.int32)
+    state_action_counts = np.zeros((env.states, len(env.actions)), dtype=int)
 
-    # TODO: Implement a variant of policy iteration algorithm, with
+    # Implement a variant of policy iteration algorithm, with
     # `args.steps` steps of policy evaluation/policy improvement. During policy
     # evaluation, estimate action-value function by Monte Carlo simulation:
     # - for start_state in range(env.states):
@@ -103,11 +104,35 @@ def main(args: argparse.Namespace) -> tuple[list[float], list[int]]:
     # After completing the policy_evaluation step (i.e., after updating estimates
     # in all states), perform the policy improvement, using the
     # `argmax_with_tolerance` to choose the best action.
+    for step in range(args.steps):
+        # Policy evaluation:
+        for start_state in range(env.states):
+            start_action = env.epsilon_greedy(args.epsilon, policy[start_state])
+            reward, state = env.step(start_state, start_action)
+            rewards = [reward]
+            for mc_step in range(args.mc_length - 1):
+                action = env.epsilon_greedy(args.epsilon, policy[state])
+                reward, state = env.step(state, action)
+                rewards.append(reward)
+            return_ = 0
+            for reward in reversed(rewards):
+                return_ = args.gamma * return_ + reward
+            # Sequential average:
+            previous_estimate = action_value_function[start_state, start_action]
+            state_action_counts[start_state, start_action] += 1
+            state_action_count = state_action_counts[start_state, start_action]
+            action_value_function[start_state, start_action] += 1 / state_action_count * (return_ - previous_estimate)
 
-    # TODO: Compute `value_function` by taking the value from
+        # Policy improvement:
+        for state in range(env.states):
+            policy[state] = argmax_with_tolerance(action_value_function[state])
+
+    # Compute `value_function` by taking the value from
     # `action_value_function` according to the computed policy.
-    value_function = None
-
+    value_function = [
+        action_value_function[state, policy[state]]
+        for state in range(env.states)
+    ]
     return value_function, policy
 
 
