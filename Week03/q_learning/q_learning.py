@@ -41,9 +41,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     training = True
     iteration = 0
     episode_100_mean = 0
-    while training:
-        break # use pre-trained Q
-        
+    while training:        
         # Perform episode
         state, done = env.reset()[0], False
         while not done:
@@ -88,8 +86,8 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             
             
 
-    #Q.dump('Q_dump')
-    Q = np.load('Q_dump', allow_pickle=True)
+    Q.dump('Q_dump')
+    #Q = np.load('Q_dump', allow_pickle=True)
 
     # Final evaluation
     while True:
@@ -107,6 +105,6 @@ if __name__ == "__main__":
 
     # Create the environment
     env = wrappers.EvaluationEnv(
-        wrappers.DiscreteMountainCarWrapper(gym.make("MountainCar1000-v0", render_mode='human')), args.seed, args.render_each)
+        wrappers.DiscreteMountainCarWrapper(gym.make("MountainCar1000-v0")), args.seed, args.render_each)
 
     main(env, args)
