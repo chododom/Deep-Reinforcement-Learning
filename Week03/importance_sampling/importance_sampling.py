@@ -20,7 +20,16 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--episodes", default=1000, type=int, help="Training episodes.")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
+
+
 # If you add more arguments, ReCodEx will keep them with your default values.
+
+def target_policy_prob(action):
+    return 0.5 if action in [1, 2] else 0.0
+
+
+def behavior_policy_prob(action):
+    return 0.25 if action in [0, 1, 2, 3] else 0.0
 
 
 def main(args: argparse.Namespace) -> np.ndarray:
@@ -49,8 +58,16 @@ def main(args: argparse.Namespace) -> np.ndarray:
             episode.append((state, action, reward))
             state = next_state
 
-        # TODO: Update V using weighted importance sampling.
-
+        # Update V using weighted importance sampling.
+        cumulative_reward = 0.0
+        weight = 1.0
+        for state, action, reward in reversed(episode):
+            if target_policy_prob(action) == 0.0:
+                break
+            cumulative_reward += reward
+            C[state] += weight
+            V[state] += weight / C[state] * (cumulative_reward - V[state])
+            weight *= target_policy_prob(action) / behavior_policy_prob(action)
     return V
 
 
