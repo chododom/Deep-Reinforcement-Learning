@@ -50,9 +50,9 @@ class GridWorld:
 
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
-parser.add_argument("--gamma", default=1.0, type=float, help="Discount factor.")
+parser.add_argument("--gamma", default=0.95, type=float, help="Discount factor.")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
-parser.add_argument("--steps", default=10, type=int, help="Number of policy evaluation/improvements to perform.")
+parser.add_argument("--steps", default=5, type=int, help="Number of policy evaluation/improvements to perform.")
 # If you add more arguments, ReCodEx will keep them with your default values.
 
 
@@ -62,18 +62,59 @@ def argmax_with_tolerance(x: np.ndarray, axis: int = -1) -> np.ndarray:
     return np.argmax(x + 1e-6 >= np.max(x, axis=axis, keepdims=True), axis=axis)
 
 
+def find_best_action(state, value_function, args):
+    sums = []
+    for action in range(len(GridWorld.actions)):
+        sum_a = 0
+        outcomes = GridWorld.step(state, action)
+
+        for next_action in outcomes:
+            probability = next_action[0]
+            reward = next_action[1]
+            next_state = next_action[2]
+
+            sum_a += probability * (reward + args.gamma * value_function[next_state])
+
+        sums.append(sum_a)
+
+    return argmax_with_tolerance(sums)
+
+
+
 def main(args: argparse.Namespace) -> tuple[list[float], list[int]]:
     # Start with zero value function and "go North" policy
     value_function = [0.0] * GridWorld.states
     policy = [0] * GridWorld.states
 
-    # TODO: Implement policy iteration algorithm, with `args.steps` steps of
+    # Implement policy iteration algorithm, with `args.steps` steps of
     # policy evaluation/policy improvement. During policy evaluation, compute
     # the value function exactly by solving the system of linear equations.
     # During the policy improvement, use the `argmax_with_tolerance` to
     # choose the best action.
 
-    # TODO: The final value function should be in `value_function` and final greedy policy in `policy`.
+    for step in range(args.steps):
+        # init matrices
+        I = np.eye(GridWorld.states)
+        P = np.zeros((GridWorld.states,GridWorld.states))
+        R = np.zeros(GridWorld.states)
+
+        for st in range(GridWorld.states):
+            outcomes = GridWorld.step(st, policy[st])
+
+            for outcome in outcomes:
+                prob, rew, new_st = outcome
+
+                P[st, new_st] += prob
+                R[st] += rew * prob
+
+
+        value_function = np.linalg.solve(I-args.gamma*P, R)
+
+        # Policy improvement
+        for st in range(GridWorld.states):
+            policy[st] = find_best_action(st, value_function, args)
+
+    # The final value function should be in `value_function` and final greedy policy in `policy`.
     return value_function, policy
 
 
