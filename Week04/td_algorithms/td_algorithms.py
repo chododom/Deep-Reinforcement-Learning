@@ -20,7 +20,7 @@ import wrappers
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
 parser.add_argument("--alpha", default=0.1, type=float, help="Learning rate alpha.")
-parser.add_argument("--episodes", default=1000, type=int, help="Training episodes.")
+parser.add_argument("--episodes", default=10, type=int, help="Training episodes.")
 parser.add_argument("--epsilon", default=0.1, type=float, help="Exploration epsilon factor.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discount factor gamma.")
 parser.add_argument("--mode", default="sarsa", type=str, help="Mode (sarsa/expected_sarsa/tree_backup).")
@@ -28,8 +28,6 @@ parser.add_argument("--n", default=1, type=int, help="Use n-step method.")
 parser.add_argument("--off_policy", default=False, action="store_true", help="Off-policy; use greedy as target")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--seed", default=47, type=int, help="Random seed.")
-
-
 # If you add more arguments, ReCodEx will keep them with your default values.
 
 
@@ -66,47 +64,79 @@ def main(args: argparse.Namespace) -> np.ndarray:
     for _ in range(args.episodes):
         next_state, done = env.reset()[0], False
 
-        if args.mode == 'sarsa':
-            T = np.inf
-            t = 0
-            tau = 0
+        T = np.inf
+        t = 0
+        tau = 0
 
-            A = np.zeros(args.n+1)
-            S = np.zeros(args.n+1)
-            R = np.zeros(args.n+1)
-            b = np.zeros(args.n+1)
+        A = np.zeros(args.n + 1) # actions
+        S = np.zeros(args.n + 1) # states 
+        R = np.zeros(args.n + 1) # rewards
+        b = np.zeros(args.n + 1) # behaviour
 
-            # Generate episode and update Q using the given TD method
-            next_action, next_action_prob = choose_next_action(Q)
-            A[0] = next_action
-            S[0] = next_state
-            b[0] = next_action_prob
+        # Generate episode and update Q using the given TD method
+        
+        next_action, next_action_prob = choose_next_action(Q)
+        A[0] = next_action
+        S[0] = next_state
+        b[0] = next_action_prob
 
-            while tau != T - 1:
-                if t < T:
-                    action, action_prob, state = next_action, next_action_prob, next_state
-                    next_state, reward, terminated, truncated, _ = env.step(action)
-                    done = terminated or truncated
-                    if not done:
-                        next_action, next_action_prob = choose_next_action(Q)
+        while tau != T - 1:
+            if t < T:
+                # Take action A_t; observe and store the next reward and state
+                action, action_prob, state = next_action, next_action_prob, next_state
+                next_state, reward, terminated, truncated, _ = env.step(action)
+                done = terminated or truncated
+                
+                S[(t + 1) % (args.n + 1)] = next_state
+                R[(t + 1) % (args.n + 1)] = reward
+                
+                if not done:
+                    # Choose an action A_t+1 arbitrarily and store it
+                    next_action, next_action_prob = choose_next_action(Q)
+                    A[(t + 1) % (args.n + 1)] = next_action
+                    b[(t + 1) % (args.n + 1)] = next_action_prob
+                else:
+                    T = t + 1
 
-                    S[(t + 1) % (args.n + 1)] = next_state
-                    R[(t + 1) % (args.n + 1)] = reward
 
-                    if done:
-                        T = t + 1
+            tau = t + 1 - args.n # tau is the time whose estimate is being updated
+            if tau >= 0:
+                
+                # n-step Tree Backup:
+                if args.mode == 'tree_backup':
+                    if t + 1 >= T:
+                        G = R[T % (args.n + 1)]
                     else:
-                        A[(t + 1) % (args.n + 1)] = next_action
-                        b[(t + 1) % (args.n + 1)] = next_action_prob
+                        sum_pi = 0
+                        for a in range(env.action_space.n):                            
+                            S_ind = S[(t + 1) % (args.n + 1)].astype(np.int32)
+                            target_policy = compute_target_policy(Q)
+                            sum_pi += target_policy[S_ind, a] * Q[S_ind, a]
 
-                tau = t - args.n + 1  # tau is the time whose estimate is being updated
+                        G = R[(t + 1) % (args.n + 1)] + args.gamma * sum_pi
+        
 
-                if tau >= 0:
-
-                    # For each `action` use its corresponding
-                    # `action_prob` at the time of taking the `action` as the behaviour policy probability,
-                    # and the `compute_target_policy(Q)` with the current `Q` as the target policy.
-
+                    k = min(t, T - 1)
+                    while k >= tau + 1:
+                        A_k = A[k % (args.n + 1)].astype(np.int32)
+                        sum_pi_except_Ak = 0
+                        for a in range(env.action_space.n):
+                            if a == A_k:
+                                continue
+                            S_ind = S[k % (args.n + 1)].astype(np.int32)
+                            target_policy = compute_target_policy(Q)
+                            sum_pi_except_Ak += target_policy[S_ind, a] * Q[S_ind, a] 
+                            
+                        G = R[k % (args.n + 1)] + args.gamma * sum_pi_except_Ak + args.gamma * target_policy[S_ind, A_k] * G
+                        k -= 1
+                    
+                    S_tau = S[tau % (args.n + 1)].astype(np.int32)
+                    A_tau = A[tau % (args.n + 1)].astype(np.int32)
+                    Q[S_tau, A_tau] += args.alpha * (G - Q[S_tau, A_tau])
+                
+            
+                # n-step SARSA:
+                elif args.mode == 'sarsa':
                     prob = 1
                     if args.off_policy:
                         for i in range(tau + 1, min(tau + args.n, T - 1) + 1):
@@ -127,35 +157,7 @@ def main(args: argparse.Namespace) -> np.ndarray:
                     a_tau = A[tau % (args.n + 1)].astype(np.int32)
                     Q[s_tau, a_tau] += args.alpha * prob * (G - Q[s_tau, a_tau])
 
-                t += 1
-
-            # TODO: Perform the update to the state-action value function `Q`, using
-            # a TD update with the following parameters:
-            # - `args.n`: use `args.n`-step method
-            # - `args.off_policy`:
-            #    - if False, the epsilon-greedy behaviour policy is also the target policy
-            #    - if True, the target policy is the greedy policy
-            #      - for SARSA (with any `args.n`) and expected SARSA (with `args.n` > 1),
-            #        importance sampling must be used
-            # - `args.mode`: this argument can have the following values:
-            #   - "sarsa": regular SARSA algorithm
-            #   - "expected_sarsa": expected SARSA algorithm
-            #   - "tree_backup": tree backup algorithm
-            #
-            # Perform the updates as soon as you can -- whenever you have all the information
-            # to update `Q[state, action]`, do it. For each `action` use its corresponding
-            # `action_prob` at the time of taking the `action` as the behaviour policy probability,
-            # and the `compute_target_policy(Q)` with the current `Q` as the target policy.
-            #
-            # Do not forget that when `done` is True, bootstrapping on the
-            # `next_state` is not used.
-
-        # Also note that when the episode ends and `args.n` > 1, there will
-        # be several state-action pairs that also need to be updated. Perform
-        # the updates in the order in which you encountered the state-action
-        # pairs and during these updates, use the `compute_target_policy(Q)`
-        # with the up-to-date value of `Q`.
-
+            t += 1
     return Q
 
 
