@@ -63,10 +63,10 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     
     
     # Assuming you have pre-trained your agent locally, perform only evaluation in ReCodEx
-    args.recodex = False
+    args.recodex = True
     if args.recodex:
         # Load the agent
-        Q_lander = np.load('Q_lander_passed.npy')
+        Q_lander = np.load('Q_lander106.npy')
         
         # Final evaluation
         while True:
@@ -81,7 +81,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     # Train
     else:
         # Uncomment to load a saved model and continue training
-        # Q = np.load('Q_lander.npy')
+        Q = np.load('Q_lander_passed.npy')
         
         use_expert = False
         from tqdm import trange
