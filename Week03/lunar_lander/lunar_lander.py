@@ -149,28 +149,31 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
                 tau = t + 1 - args.n # tau is the time whose estimate is being updated
                 if tau >= 0:
+                    target_policy = compute_target_policy(Q)
                     if t + 1 >= T:
                         G = R[T % (args.n + 1)]
                     else:
-                        sum_pi = 0
-                        for a in range(env.action_space.n):                            
-                            S_ind = S[(t + 1) % (args.n + 1)].astype(np.int32)
-                            target_policy = compute_target_policy(Q)
-                            sum_pi += target_policy[S_ind, a] * Q[S_ind, a]
+
+                        S_ind = S[(t + 1) % (args.n + 1)].astype(np.int32)
+                        sum_pi = target_policy[S_ind] @ Q[S_ind].T
+                        # sum_pi = 0
+                        # for a in range(env.action_space.n):
+                        #     sum_pi += target_policy[S_ind, a] * Q[S_ind, a]
 
                         G = R[(t + 1) % (args.n + 1)] + args.gamma * sum_pi
-        
+
 
                     k = min(t, T - 1)
                     while k >= tau + 1:
                         A_k = int(A[k % (args.n + 1)])
-                        sum_pi_except_Ak = 0
-                        for a in range(env.action_space.n):
-                            if a == A_k:
-                                continue
-                            S_ind = S[k % (args.n + 1)].astype(np.int32)
-                            target_policy = compute_target_policy(Q)
-                            sum_pi_except_Ak += target_policy[S_ind, a] * Q[S_ind, a] 
+                        S_ind = S[k % (args.n + 1)].astype(np.int32)
+                        sum_pi_except_Ak = target_policy[S_ind] @ Q[S_ind].T - target_policy[S_ind, A_k] * Q[S_ind, A_k]
+                        # sum_pi_except_Ak = 0
+                        # for a in range(env.action_space.n):
+                        #     if a == A_k:
+                        #         continue
+                        #     S_ind = S[k % (args.n + 1)].astype(np.int32)
+                        #     sum_pi_except_Ak += target_policy[S_ind, a] * Q[S_ind, a]
                             
                         G = R[k % (args.n + 1)] + args.gamma * sum_pi_except_Ak + args.gamma * target_policy[S_ind, A_k] * G
                         k -= 1
