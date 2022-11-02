@@ -22,13 +22,16 @@ parser.add_argument("--recodex", default=False, action="store_true", help="Runni
 parser.add_argument("--render_each", default=0, type=int, help="Render some episodes.")
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
-parser.add_argument("--alpha", default=0.25, type=float, help="Learning rate.")
-parser.add_argument("--epsilon", default=0.9, type=float, help="Exploration factor.")
-parser.add_argument("--epsilon_final", default=0.1, type=float, help="Final exploration factor.")
-parser.add_argument("--epsilon_final_at", default=3000, type=int, help="Training episodes.")
-parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
+parser.add_argument("--alpha", default=0.7, type=float, help="Learning rate.")
+parser.add_argument("--alpha_final", default=0.05, type=float, help="Final learning rate.")
+parser.add_argument("--alpha_final_at", default=2000, type=int, help="Training episodes.")
+parser.add_argument("--epsilon", default=0.6, type=float, help="Exploration factor.")
+parser.add_argument("--epsilon_final", default=0.05, type=float, help="Final exploration factor.")
+parser.add_argument("--epsilon_final_at", default=1500, type=int, help="Training episodes.")
+parser.add_argument("--gamma", default=0.985, type=float, help="Discounting factor.")
 parser.add_argument("--tiles", default=8, type=int, help="Number of tiles.")
-parser.add_argument("--episodes", default=5000, type=int, help="Number of episodes to train for.")
+parser.add_argument("--episodes", default=4000, type=int, help="Number of episodes to train for.")
+parser.add_argument("--use_pretrained", default=False, action="store_true", help="Load pre-trained model.")
 
 
 def greedy_action(state, W):
@@ -48,9 +51,14 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     epsilon = args.epsilon
     alpha = args.alpha / args.tiles
 
+    episode = 0
+
     # training = True
     # while training:
     for _ in range(args.episodes):
+        if args.use_pretrained:
+            break
+        episode += 1
         # Perform episode
         state, done = env.reset()[0], False
         while not done:
@@ -65,7 +73,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
             # Update the action-value estimates
             if done:
-                W[state, action] += args.alpha * (reward - q_hat(state, action, W))
+                W[state, action] += alpha * (reward - q_hat(state, action, W))
             else:
                 next_state_q_hat = q_hat(next_state, greedy_action(next_state, W), W)
                 W[state, action] += alpha * (reward + args.gamma * next_state_q_hat - q_hat(state, action, W))
@@ -73,6 +81,16 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
         if args.epsilon_final_at:
             epsilon = np.interp(env.episode + 1, [0, args.epsilon_final_at], [args.epsilon, args.epsilon_final])
+        
+        if args.alpha_final_at:
+            alpha = np.interp(env.episode + 1, [0, args.alpha_final_at], [args.alpha, args.alpha_final])
+            alpha /= args.tiles
+                
+    if args.use_pretrained:
+        W = np.load('W_dump.npy', allow_pickle=True)
+    else:
+        W.dump('W_dump.npy')
+
 
     # Final evaluation
     while True:
