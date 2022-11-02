@@ -31,7 +31,7 @@ parser.add_argument("--epsilon_final_at", default=1500, type=int, help="Training
 parser.add_argument("--gamma", default=0.985, type=float, help="Discounting factor.")
 parser.add_argument("--tiles", default=8, type=int, help="Number of tiles.")
 parser.add_argument("--episodes", default=4000, type=int, help="Number of episodes to train for.")
-parser.add_argument("--use_pretrained", default=False, action="store_true", help="Load pre-trained model.")
+parser.add_argument("--use_pretrained", default=True, action="store_true", help="Load pre-trained model.")
 
 
 def greedy_action(state, W):
