@@ -22,12 +22,21 @@ parser.add_argument("--recodex", default=False, action="store_true", help="Runni
 parser.add_argument("--render_each", default=0, type=int, help="Render some episodes.")
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
-parser.add_argument("--alpha", default=None, type=float, help="Learning rate.")
-parser.add_argument("--epsilon", default=None, type=float, help="Exploration factor.")
-parser.add_argument("--epsilon_final", default=None, type=float, help="Final exploration factor.")
-parser.add_argument("--epsilon_final_at", default=None, type=int, help="Training episodes.")
-parser.add_argument("--gamma", default=None, type=float, help="Discounting factor.")
+parser.add_argument("--alpha", default=0.25, type=float, help="Learning rate.")
+parser.add_argument("--epsilon", default=0.9, type=float, help="Exploration factor.")
+parser.add_argument("--epsilon_final", default=0.1, type=float, help="Final exploration factor.")
+parser.add_argument("--epsilon_final_at", default=3000, type=int, help="Training episodes.")
+parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
 parser.add_argument("--tiles", default=8, type=int, help="Number of tiles.")
+parser.add_argument("--episodes", default=5000, type=int, help="Number of episodes to train for.")
+
+
+def greedy_action(state, W):
+    return np.argmax(np.sum(W[state], axis=0))
+
+
+def q_hat(state, action, W):
+    return np.sum(W[state, action])
 
 
 def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
@@ -37,21 +46,30 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     # Implement Q-learning RL algorithm, using linear approximation.
     W = np.zeros([env.observation_space.nvec[-1], env.action_space.n])
     epsilon = args.epsilon
+    alpha = args.alpha / args.tiles
 
-    training = True
-    while training:
+    # training = True
+    # while training:
+    for _ in range(args.episodes):
         # Perform episode
         state, done = env.reset()[0], False
         while not done:
-            # TODO: Choose an action.
-            action = ...
+            # Choose an action.
+            if np.random.uniform() < epsilon:
+                action = env.action_space.sample()
+            else:
+                action = greedy_action(state, W)
 
             next_state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
 
-            # TODO: Update the action-value estimates
-
-            state = next_state
+            # Update the action-value estimates
+            if done:
+                W[state, action] += args.alpha * (reward - q_hat(state, action, W))
+            else:
+                next_state_q_hat = q_hat(next_state, greedy_action(next_state, W), W)
+                W[state, action] += alpha * (reward + args.gamma * next_state_q_hat - q_hat(state, action, W))
+                state = next_state
 
         if args.epsilon_final_at:
             epsilon = np.interp(env.episode + 1, [0, args.epsilon_final_at], [args.epsilon, args.epsilon_final])
@@ -60,8 +78,8 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     while True:
         state, done = env.reset(start_evaluation=True)[0], False
         while not done:
-            # TODO: Choose (greedy) action
-            action = ...
+            # Choose (greedy) action
+            action = greedy_action(state, W)
             state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
 
