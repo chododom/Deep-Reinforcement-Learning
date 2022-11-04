@@ -14,6 +14,9 @@ from __future__ import annotations
 import argparse
 import collections
 import os
+import random
+import zipfile
+
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Report only TF errors by default
 
 import gym
@@ -27,23 +30,40 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--render_each", default=0, type=int, help="Render some episodes.")
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
-parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
+parser.add_argument("--threads", default=0, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
-parser.add_argument("--batch_size", default=None, type=int, help="Batch size.")
-parser.add_argument("--epsilon", default=None, type=float, help="Exploration factor.")
-parser.add_argument("--epsilon_final", default=None, type=float, help="Final exploration factor.")
-parser.add_argument("--epsilon_final_at", default=None, type=int, help="Training episodes.")
-parser.add_argument("--gamma", default=None, type=float, help="Discounting factor.")
-parser.add_argument("--hidden_layer_size", default=None, type=int, help="Size of hidden layer.")
-parser.add_argument("--learning_rate", default=None, type=float, help="Learning rate.")
-parser.add_argument("--target_update_freq", default=None, type=int, help="Target update frequency.")
+parser.add_argument("--batch_size", default=8, type=int, help="Batch size.")
+parser.add_argument("--epsilon", default=1, type=float, help="Exploration factor.")
+parser.add_argument("--epsilon_final", default=0.1, type=float, help="Final exploration factor.")
+parser.add_argument("--epsilon_final_at", default=100, type=int, help="Training episodes.")
+parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
+parser.add_argument("--hidden_layer_size", default=32, type=int, help="Size of hidden layer.")
+parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
+parser.add_argument("--target_update_freq", default=16, type=int, help="Target update frequency.")
 
 
 class Network:
-    def __init__(self, env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
+    def __init__(self, env: wrappers.EvaluationEnv, args: argparse.Namespace, model_path: str = None) -> None:
         # TODO: Create a suitable model. The rest of the code assumes
         # it is stored as `self._model` and has been `.compile()`-d.
-        raise NotImplementedError()
+        # You can use `self._model.summary()` to see a summary of the model.
+        # print(env.action_space.n)
+        if model_path is None:
+            model = tf.keras.Sequential([
+                tf.keras.layers.Input(env.observation_space.shape, batch_size=args.batch_size),
+                tf.keras.layers.Dense(args.hidden_layer_size, activation=tf.nn.relu),
+                tf.keras.layers.Dense(env.action_space.n),
+            ])
+
+            model.compile(
+                optimizer=tf.keras.optimizers.Adam(learning_rate=args.learning_rate),
+                loss=tf.keras.losses.MeanSquaredError()
+            )
+            model.summary()
+        else:
+            model = tf.keras.models.load_model(model_path)
+
+        self._model = model
 
     # Define a training method. Generally you have two possibilities
     # - pass new q_values of all actions for a given state; all but one are the same as before
@@ -76,6 +96,9 @@ class Network:
         for var, other_var in zip(self._model.variables, other._model.variables):
             var.assign(other_var)
 
+    def predict_q(self, state):
+        return self.predict([state])[0]
+
 
 def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     # Set random seeds and number of threads
@@ -92,40 +115,82 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     replay_buffer = collections.deque()
     Transition = collections.namedtuple("Transition", ["state", "action", "reward", "done", "next_state"])
 
+    target_network = Network(env, args)
+    target_network.copy_weights_from(network)
+
     epsilon = args.epsilon
-    training = True
+    iteration = 0
+    episode_100_mean = 0
+    training = args.recodex is False
+
+    c = 0
     while training:
         # Perform episode
         state, done = env.reset()[0], False
         while not done:
-            # TODO: Choose an action.
-            # You can compute the q_values of a given state by
-            #   q_values = network.predict([state])[0]
-            action = ...
+
+            if np.random.uniform() < epsilon:
+                action = env.action_space.sample()
+            else:
+                action = np.argmax(target_network.predict_q(state))
 
             next_state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
+            episode_100_mean += reward
 
             # Append state, action, reward, done and next_state to replay_buffer
             replay_buffer.append(Transition(state, action, reward, done, next_state))
 
-            # TODO: If the replay_buffer is large enough, perform a training batch
+            # If the replay_buffer is large enough, perform a training batch
             # from `args.batch_size` uniformly randomly chosen transitions.
-            #
-            # After you choose `states` and suitable targets, you can train the network as
-            #   network.train(states, ...)
+            if len(replay_buffer) > args.batch_size:
+                samples = random.sample(replay_buffer, args.batch_size)
+                states = np.asarray([s.state for s in samples])
+                actions = [s.action for s in samples]
+
+                targets = [s.reward + (1 - s.done) * args.gamma * np.argmax(target_network.predict_q(s.next_state))
+                           for s in samples]
+
+                q_values = network.predict(states)
+                q_values[np.arange(len(actions)), actions] = targets
+
+                # print(q_values)
+
+                # After you choose `states` and suitable targets, you can train the network as
+                network.train(states, q_values)
 
             state = next_state
 
+            if c % args.target_update_freq:
+                target_network.copy_weights_from(network)
+            else:
+                c = (c + 1) % args.target_update_freq
+
         if args.epsilon_final_at:
             epsilon = np.interp(env.episode + 1, [0, args.epsilon_final_at], [args.epsilon, args.epsilon_final])
+
+        # Reset mean 100-episode return (and if it is good enough, end training)
+        if iteration % 100 == 0:
+            if episode_100_mean / 100.0 > 470:
+                network._model.save("model_470")
+                training = False
+            else:
+                episode_100_mean = 0
+
+        iteration += 1
+        network._model.save("model")
+
+    if args.recodex:
+        with zipfile.ZipFile("model_470.zip", 'r') as zip_ref:
+            zip_ref.extractall("./")
+            target_network = Network(env, args, "model_470")
 
     # Final evaluation
     while True:
         state, done = env.reset(start_evaluation=True)[0], False
         while not done:
-            # TODO: Choose (greedy) action
-            action = ...
+            # Choose (greedy) action
+            action = np.argmax(target_network.predict_q(state))
             state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
 
