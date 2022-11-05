@@ -148,8 +148,8 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 states = np.asarray([s.state for s in samples])
                 actions = [s.action for s in samples]
 
-                targets = [s.reward + (1 - s.done) * args.gamma * np.argmax(target_network.predict_q(s.next_state))
-                           for s in samples]
+                targets = [s.reward + (1 - s.done) * args.gamma * target_network.predict_q(s.next_state)[
+                    np.argmax(network.predict_q(s.next_state))] for s in samples]
 
                 q_values = network.predict(states)
                 q_values[np.arange(len(actions)), actions] = targets
