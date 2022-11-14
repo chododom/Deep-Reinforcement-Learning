@@ -46,6 +46,10 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     state, done = env.reset()[0], False
     
     for _ in range(args.episodes):
+        
+        break # skip training, try to load data from external pre-trained file
+    
+    
         # Perform an episode, collecting states, actions and rewards.
         episode_collection = []
 
@@ -79,6 +83,8 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             Q[state][action] = Q[state][action] + (1.0/C[state][action])*(G - Q[state][action])
             
         
+    #Q.dump('Q_dump')
+    Q = np.load('Q_dump', allow_pickle=True)
 
     # Final evaluation
     while True:
