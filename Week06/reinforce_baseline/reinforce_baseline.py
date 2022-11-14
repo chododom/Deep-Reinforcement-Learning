@@ -31,8 +31,8 @@ parser.add_argument("--threads", default=1, type=int, help="Maximum number of th
 parser.add_argument("--batch_size", default=1, type=int, help="Batch size.")
 parser.add_argument("--episodes", default=200, type=int, help="Training episodes.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
-parser.add_argument("--hidden_layer_size", default=50, type=int, help="Size of hidden layer.")
-parser.add_argument("--learning_rate", default=0.01, type=float, help="Learning rate.")
+parser.add_argument("--hidden_layer_size", default=64, type=int, help="Size of hidden layer.")
+parser.add_argument("--learning_rate", default=0.008, type=float, help="Learning rate.")
 
 
 class Network:
