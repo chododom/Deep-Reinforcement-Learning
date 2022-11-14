@@ -67,7 +67,7 @@ class Network:
     def train(self, states: np.ndarray, actions: np.ndarray, returns: np.ndarray) -> None:
         
         with tf.GradientTape() as tape:
-            predictions = self._model(states, actions, returns)
+            predictions = self._model(states)
             y_true = actions
             y_pred = predictions
             reinforce_loss = self._model.loss(y_true, y_pred, sample_weight=returns)
