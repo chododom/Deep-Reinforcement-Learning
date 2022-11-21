@@ -103,7 +103,7 @@ class Network:
         
         """ Equivalent to:
         self.critic.optimizer.minimize(
-            lambda: self.critic.loss(returns, self.critic([states, actions], training=True)),  # q_old, q_new
+            lambda: self.critic.loss(returns, self.critic([states, actions], training=True)),
             var_list=self.critic.trainable_variables
         )
         """
