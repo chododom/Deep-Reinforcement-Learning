@@ -33,12 +33,12 @@ parser.add_argument("--threads", default=0, type=int, help="Maximum number of th
 parser.add_argument("--entropy_regularization", default=0.1, type=float, help="Entropy regularization weight.")
 parser.add_argument("--envs", default=16, type=int, help="Number of parallel environments.")
 parser.add_argument("--evaluate_each", default=100, type=int, help="Evaluate each number of batches.")
-parser.add_argument("--evaluate_for", default=10, type=int, help="Evaluate the given number of episodes.")
+parser.add_argument("--evaluate_for", default=30, type=int, help="Evaluate the given number of episodes.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
 parser.add_argument("--hidden_layer_size", default=64, type=int, help="Size of hidden layer.")
 parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
 parser.add_argument("--tiles", default=16, type=int, help="Tiles to use.")
-parser.add_argument("--embedding_dim", default=64, type=int, help="Dimension of the embedding layer.")
+parser.add_argument("--embedding_dim", default=16, type=int, help="Dimension of the embedding layer.")
 
 
 class Network:
@@ -64,30 +64,38 @@ class Network:
         # The critic should be a usual one, passing states through one hidden
         # layer with `args.hidden_layer_size` ReLU units and then predicting
         # the value function.
+        self.entropy_regularization = args.entropy_regularization
 
         inputs = tf.keras.layers.Input(shape=env.observation_space.shape)
-        # x = tf.keras.layers.Embedding(input_dim=env.observation_space.nvec[-1],
-        #                               output_dim=args.embedding_dim,
-        #                               input_length=env.observation_space.shape[0])(inputs)
-        # x = tf.keras.layers.Flatten()(x)
-        x = tf.keras.layers.CategoryEncoding(num_tokens=env.observation_space.nvec[-1])(inputs)
-        x = tf.keras.layers.Dense(args.hidden_layer_size, activation='relu')(x)
-        mus = tf.keras.layers.Dense(env.action_space.shape[0])(x)
+        # x = tf.keras.layers.CategoryEncoding(num_tokens=env.observation_space.nvec[-1])(inputs)
+        mus = tf.keras.layers.Embedding(input_dim=env.observation_space.nvec[-1],
+                                        output_dim=args.embedding_dim,
+                                        input_length=env.observation_space.shape[0])(inputs)
+        mus = tf.keras.layers.Flatten()(mus)
+        mus = tf.keras.layers.Dense(args.hidden_layer_size, activation='relu')(mus)
+        mus = tf.keras.layers.Dense(env.action_space.shape[0])(mus)
         mus = tf.math.tanh(mus)  # No further scaling necessary since the action's range is (-1, 1).
-        sigmas = tf.keras.layers.Dense(env.action_space.shape[0])(x)
+
+        sigmas = tf.keras.layers.Embedding(input_dim=env.observation_space.nvec[-1],
+                                           output_dim=args.embedding_dim,
+                                           input_length=env.observation_space.shape[0])(inputs)
+        sigmas = tf.keras.layers.Flatten()(sigmas)
+        sigmas = tf.keras.layers.Dense(args.hidden_layer_size, activation='relu')(sigmas)
+        sigmas = tf.keras.layers.Dense(env.action_space.shape[0])(sigmas)
         sigmas = tf.math.softplus(sigmas)
+
         actor_network = tf.keras.Model(inputs=inputs, outputs=[mus, sigmas])
         actor_network.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=args.learning_rate))
         self._actor_network = actor_network
 
-        # x = tf.keras.layers.Embedding(input_dim=env.observation_space.nvec[-1],
-        #                               output_dim=args.embedding_dim,
-        #                               input_length=env.observation_space.shape[0])(inputs)
-        # x = tf.keras.layers.Flatten()(x)
-        x = tf.keras.layers.CategoryEncoding(num_tokens=env.observation_space.nvec[-1])(inputs)
-        x = tf.keras.layers.Dense(args.hidden_layer_size, activation='relu')(x)
-        output = tf.keras.layers.Dense(1)(x)
-        critic_network = tf.keras.Model(inputs=inputs, outputs=output)
+        value_function = tf.keras.layers.Embedding(input_dim=env.observation_space.nvec[-1],
+                                                   output_dim=args.embedding_dim,
+                                                   input_length=env.observation_space.shape[0])(inputs)
+        value_function = tf.keras.layers.Flatten()(value_function)
+        value_function = tf.keras.layers.Dense(args.hidden_layer_size, activation='relu')(value_function)
+        value_function = tf.keras.layers.Dense(1)(value_function)
+
+        critic_network = tf.keras.Model(inputs=inputs, outputs=value_function)
         critic_network.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=args.learning_rate))
         self._critic_network = critic_network
 
@@ -111,15 +119,14 @@ class Network:
         #
         # Train the critic using mean square error of the `returns` and predicted values.
 
+        advantages = returns - tf.squeeze(self._critic_network(states))
         with tf.GradientTape() as actor_tape:
-            mus, sigmas = self._actor_network(states)
-            # distributions = tfp.distributions.TruncatedNormal(mus, sigmas, -1, 1)
+            mus, sigmas = self._actor_network(states, training=True)
             distributions = tfp.distributions.Normal(mus, sigmas)
-            advantages = tf.stop_gradient(returns - tf.squeeze(self._critic_network(states, training=True)))
             log_likelihood = tf.squeeze(distributions.log_prob(actions))
             reinforce_loss = log_likelihood * advantages
 
-            entropy_loss = args.entropy_regularization * distributions.entropy()
+            entropy_loss = self.entropy_regularization * distributions.entropy()
 
             actor_loss = -tf.reduce_mean(reinforce_loss + entropy_loss)
         actor_grads = actor_tape.gradient(actor_loss, self._actor_network.trainable_weights)
@@ -127,7 +134,7 @@ class Network:
 
         with tf.GradientTape() as critic_tape:
             predicted_values = self._critic_network(states, training=True)
-            critic_loss = tf.reduce_mean((predicted_values - returns)**2)
+            critic_loss = tf.keras.losses.MeanSquaredError()(returns, predicted_values)
         critic_grads = critic_tape.gradient(critic_loss, self._critic_network.trainable_weights)
         self._critic_network.optimizer.apply_gradients(zip(critic_grads, self._critic_network.trainable_weights))
 
@@ -178,7 +185,6 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             # forget to clip the actions to the `env.action_space.{low,high}`
             # range, for example using `np.clip`.
             mus, sigmas = network.predict_actions(states)
-            # distributions = tfp.distributions.TruncatedNormal(mus, sigmas, env.action_space.low, env.action_space.high)
             distributions = tfp.distributions.Normal(mus, sigmas)
             actions = distributions.sample().numpy()
             actions = np.clip(actions, env.action_space.low, env.action_space.high)
@@ -197,6 +203,9 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
 
         # Periodic evaluation
         returns = [evaluate_episode() for _ in range(args.evaluate_for)]
+        if np.mean(returns) - np.std(returns) > 90:
+            training = False
+            vector_env.close()
 
     # Final evaluation
     while True:
