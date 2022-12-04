@@ -86,15 +86,7 @@ class Network:
         
     @wrappers.typed_np_function(np.float32, np.float32, np.float32)
     @wrappers.raw_tf_function(dynamic_dims=1)
-    def train(self, states: np.ndarray, actions: np.ndarray, returns: np.ndarray) -> None:
-
-        # Train actor using DPG loss
-        with tf.GradientTape() as atape:
-            critic_value = self.critic([states, self.actor(states, training=True)], training=True)
-            # Invert sign as we want to maximize the value given by the critic for our actions 
-            dpg_loss = -tf.math.reduce_mean(critic_value)
-        actor_grads = atape.gradient(dpg_loss, self.actor.trainable_variables)
-        self.actor.optimizer.apply_gradients(zip(actor_grads, self.actor.trainable_variables))
+    def train_critics(self, states: np.ndarray, actions: np.ndarray, returns: np.ndarray) -> None:
         
         # Train critics using MSE loss
         with tf.GradientTape() as ctape:
@@ -106,6 +98,17 @@ class Network:
             critic_value2 = self.critic2([states, actions], training=True)
             mse_loss2 = self.critic2.loss(returns, critic_value2)
         self.critic2.optimizer.minimize(mse_loss2, self.critic2.trainable_variables, tape=ctape2)
+    
+    @wrappers.typed_np_function(np.float32, np.float32, np.float32)
+    @wrappers.raw_tf_function(dynamic_dims=1)
+    def train_actor_and_targets(self, states: np.ndarray, actions: np.ndarray, returns: np.ndarray) -> None:
+        # Train actor using DPG loss
+        with tf.GradientTape() as atape:
+            critic_value = self.critic([states, self.actor(states, training=True)], training=True)
+            # Invert sign as we want to maximize the value given by the critic for our actions 
+            dpg_loss = -tf.math.reduce_mean(critic_value)
+        actor_grads = atape.gradient(dpg_loss, self.actor.trainable_variables)
+        self.actor.optimizer.apply_gradients(zip(actor_grads, self.actor.trainable_variables))
         
         for var, target_var in zip(self.critic.trainable_variables, self.target_critic.trainable_variables):
             target_var.assign(target_var * (1 - args.target_tau) + var * args.target_tau)
