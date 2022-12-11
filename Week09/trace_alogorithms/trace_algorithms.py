@@ -29,6 +29,8 @@ parser.add_argument("--recodex", default=False, action="store_true", help="Runni
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
 parser.add_argument("--trace_lambda", default=None, type=float, help="Trace factor lambda, if any.")
 parser.add_argument("--vtrace_clip", default=None, type=float, help="V-Trace clip rho and c, if any.")
+
+
 # If you add more arguments, ReCodEx will keep them with your default values.
 
 
@@ -64,6 +66,9 @@ def main(args: argparse.Namespace) -> np.ndarray:
     generator = np.random.RandomState(args.seed)
 
     V = np.zeros(env.observation_space.n)
+    n = args.n
+    gamma = args.gamma
+    alpha = args.alpha
 
     # The target policy is either the behavior policy (if not `args.off_policy`),
     # or an epsilon/3-greedy policy (if `args.off_policy`).
@@ -76,15 +81,25 @@ def main(args: argparse.Namespace) -> np.ndarray:
         state, done = env.reset()[0], False
 
         # Generate episode and update V using the given TD method
-        while not done:
-            best_action = argmax_with_tolerance(R[state] + (1 - D[state]) * args.gamma * V[N[state]])
-            action = best_action if generator.uniform() >= args.epsilon else env.action_space.sample()
-            action_prob = args.epsilon / env.action_space.n + (1 - args.epsilon) * (action == best_action)
+        episode_length = np.inf
+        step = 0
+        state_buffer = np.zeros(n + 1, dtype=int)
+        state_buffer[0] = state
+        reward_buffer = np.zeros(n + 1, dtype=float)
+        while step < episode_length + n - 1:
+            if step < episode_length:
+                best_action = argmax_with_tolerance(R[state] + (1 - D[state]) * args.gamma * V[N[state]])
+                action = best_action if generator.uniform() >= args.epsilon else env.action_space.sample()
+                action_prob = args.epsilon / env.action_space.n + (1 - args.epsilon) * (action == best_action)
 
-            next_state, reward, terminated, truncated, _ = env.step(action)
-            done = terminated or truncated
+                next_state, reward, terminated, truncated, _ = env.step(action)
+                done = terminated or truncated
+                state_buffer[(step + 1) % (n + 1)] = next_state
+                reward_buffer[(step + 1) % (n + 1)] = reward
+                if done:
+                    episode_length = step + 1
 
-            # TODO: Perform the update to the state value function `V`, using
+            # Perform the update to the state value function `V`, using
             # a TD update with the following parameters:
             # - `args.n`: use `args.n`-step estimated return
             # - if `args.trace_lambda` is not None, use eligibility traces
@@ -112,8 +127,17 @@ def main(args: argparse.Namespace) -> np.ndarray:
             # and during these updates, use the `compute_target_policy(V)` with
             # the up-to-date value of `V`.
 
-            state = next_state
+            tau = step - n + 1
+            if tau >= 0:
+                G = 0
+                for i in range(tau + 1, min(tau + n, episode_length) + 1):
+                    G += gamma ** (i - tau - 1) * reward_buffer[i % (n + 1)]
+                if tau + n < episode_length:
+                    G += gamma ** n * V[state_buffer[(tau + n) % (n + 1)]]
+                V[state_buffer[tau % (n + 1)]] += alpha * (G - V[state_buffer[tau % (n + 1)]])
 
+            step += 1
+            state = state_buffer[step % (n + 1)]
     return V
 
 
