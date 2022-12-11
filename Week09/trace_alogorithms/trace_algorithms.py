@@ -23,14 +23,12 @@ parser.add_argument("--alpha", default=0.1, type=float, help="Learning rate alph
 parser.add_argument("--episodes", default=1000, type=int, help="Training episodes.")
 parser.add_argument("--epsilon", default=0.1, type=float, help="Exploration epsilon factor.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discount factor gamma.")
-parser.add_argument("--n", default=1, type=int, help="Use n-step method.")
+parser.add_argument("--n", default=4, type=int, help="Use n-step method.")
 parser.add_argument("--off_policy", default=False, action="store_true", help="Off-policy (less exploratory target)")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--seed", default=42, type=int, help="Random seed.")
 parser.add_argument("--trace_lambda", default=None, type=float, help="Trace factor lambda, if any.")
 parser.add_argument("--vtrace_clip", default=None, type=float, help="V-Trace clip rho and c, if any.")
-
-
 # If you add more arguments, ReCodEx will keep them with your default values.
 
 
@@ -69,6 +67,7 @@ def main(args: argparse.Namespace) -> np.ndarray:
     n = args.n
     gamma = args.gamma
     alpha = args.alpha
+    lambda_ = args.trace_lambda if args.trace_lambda is not None else 1.0
 
     # The target policy is either the behavior policy (if not `args.off_policy`),
     # or an epsilon/3-greedy policy (if `args.off_policy`).
@@ -84,8 +83,12 @@ def main(args: argparse.Namespace) -> np.ndarray:
         episode_length = np.inf
         step = 0
         state_buffer = np.zeros(n + 1, dtype=int)
-        state_buffer[0] = state
         reward_buffer = np.zeros(n + 1, dtype=float)
+        prob_buffer = np.zeros(n + 1, dtype=float)
+        action_buffer = np.zeros(n + 1, dtype=int)
+
+        state_buffer[0] = state
+
         while step < episode_length + n - 1:
             if step < episode_length:
                 best_action = argmax_with_tolerance(R[state] + (1 - D[state]) * args.gamma * V[N[state]])
@@ -96,6 +99,8 @@ def main(args: argparse.Namespace) -> np.ndarray:
                 done = terminated or truncated
                 state_buffer[(step + 1) % (n + 1)] = next_state
                 reward_buffer[(step + 1) % (n + 1)] = reward
+                prob_buffer[step % (n + 1)] = action_prob
+                action_buffer[step % (n + 1)] = action
                 if done:
                     episode_length = step + 1
 
@@ -130,11 +135,19 @@ def main(args: argparse.Namespace) -> np.ndarray:
             tau = step - n + 1
             if tau >= 0:
                 G = 0
-                for i in range(tau + 1, min(tau + n, episode_length) + 1):
-                    G += gamma ** (i - tau - 1) * reward_buffer[i % (n + 1)]
-                if tau + n < episode_length:
-                    G += gamma ** n * V[state_buffer[(tau + n) % (n + 1)]]
-                V[state_buffer[tau % (n + 1)]] += alpha * (G - V[state_buffer[tau % (n + 1)]])
+                for i in range(tau, min(tau + n, episode_length)):
+                    delta = reward_buffer[(i + 1) % (n + 1)] \
+                            + (1 - (i == episode_length - 1)) * gamma * V[state_buffer[(i + 1) % (n + 1)]] \
+                            - V[state_buffer[i % (n + 1)]]
+                    target_probs = compute_target_policy(V)
+                    rho = 1.0
+                    if args.off_policy:
+                        for j in range(tau, i + 1):
+                            pi = target_probs[state_buffer[j % (n + 1)], action_buffer[j % (n + 1)]]
+                            b = prob_buffer[j % (n + 1)]
+                            rho *= pi / b if not args.vtrace_clip else min(args.vtrace_clip, pi / b)
+                    G += gamma ** (i - tau) * lambda_ ** (i - tau) * rho * delta
+                V[state_buffer[tau % (n + 1)]] += alpha * G
 
             step += 1
             state = state_buffer[step % (n + 1)]
