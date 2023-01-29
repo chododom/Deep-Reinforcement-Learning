@@ -29,8 +29,8 @@ parser.add_argument("--render_each", default=0, type=int, help="Render some epis
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # If you add more arguments, ReCodEx will keep them with your default values.
-parser.add_argument("--batch_size", default=128, type=int, help="Number of episodes to train on.")
-parser.add_argument("--evaluate_each", default=10, type=int, help="Evaluate each number of episodes.")
+parser.add_argument("--batch_size", default=1, type=int, help="Number of episodes to train on.")
+parser.add_argument("--evaluate_each", default=50, type=int, help="Evaluate each number of episodes.")
 parser.add_argument("--evaluate_for", default=5, type=int, help="Evaluate for number of episodes.")
 parser.add_argument("--hidden_layer", default=None, type=int, help="Hidden layer size; default 8*`cards`")
 parser.add_argument("--memory_cells", default=None, type=int, help="Number of memory cells; default 2*`cards`")
@@ -97,9 +97,9 @@ class Network:
         # with shape `[self.args.memory_cells, self.args.memory_cell_size]`.
         return tf.zeros(shape=[self.args.memory_cells, self.args.memory_cell_size])
 
-    @tf.function
-    def _train(self, states, targets):
-        # TODO: Given a batch of sequences of `states` (each being a (card, symbol) pair),
+    #@tf.function
+    def _train(self, states, targets, lengths):
+        # Given a batch of sequences of `states` (each being a (card, symbol) pair),
         # train the network to predict the required `targets`.
         #
         # Specifically, start with a batch of empty memories, and run the agent
@@ -108,12 +108,65 @@ class Network:
         # Note that the sequences can be of different length, so you need to pad them
         # to same length and then somehow indicate the length of the individual episodes
         # (one possibility is to add another parameter to `_train`).
-        raise NotImplementedError()
+        # It is possible to use Ragged Tensors.
+     
+        """
+        with tf.GradientTape() as tape:
+            memories = [tf.zeros(shape=[self.args.memory_cells, self.args.memory_cell_size]) for x in range(len(states))]
+            overall_losses = [0.0 for x in range(len(states))]
+            for step in range(max(lengths)-1):
+                memories[step], policies = self.predict([memories[step]], states[step])
+                curr_losses = self._agent.loss(targets[step], policies)
+                overall_losses = tf.math.add(overall_losses, curr_losses)
+            loss = tf.math.reduce_mean(overall_losses)
+            
+        self._agent.optimizer.minimize(loss, self._agent.trainable_variables, tape=tape)
+        """
+        """
+        memories = [tf.zeros(shape=[self.args.memory_cells, self.args.memory_cell_size]) for x in range(len(states))]
+        overall_losses = [0.0 for x in range(len(states))]
+        for step in range(max(lengths)):
+            memories[step], policies = self.predict([memories[step]], states[step])
+            curr_losses = self._agent.loss(targets[step], policies)
+            overall_losses = tf.math.add(overall_losses, curr_losses)"""
+            
+            
+            
+        """
+        with tf.GradientTape() as tape:
+            memory = tf.zeros(shape=[self.args.memory_cells, self.args.memory_cell_size])
+            loss = 0 
+            for state, target_action in zip(states, targets):
+                if target_action is None:
+                    break
+                memory, policy = self.predict([memory], [state])
+                loss += self._agent.loss(target_action, policy)
+            
+        self._agent.optimizer.minimize(loss, self._agent.trainable_variables, tape=tape)"""
+            
 
     def train(self, episodes):
-        # TODO: Given a list of episodes, prepare the arguments
+        # Given a list of episodes, prepare the arguments
         # of the self._train method, and execute it.
-        raise NotImplementedError()
+        
+        state_batches, action_batches, episode_lengths = [], [], [len(e) for e in episodes]
+        max_len = max(episode_lengths)
+        for step in range(max_len):
+            states, actions = [], []
+            for episode in episodes:
+                if step < len(episode):
+                    s, a = episode[step]
+                    states.append(s)
+                    actions.append(a)
+                else:
+                    states.append(None)
+                    actions.append(None)
+            state_batches.append(states)
+            action_batches.append(actions)
+                    
+        self._train(state_batches, action_batches, episode_lengths)
+        raise Exception('STOP after one episode')
+        
 
     @wrappers.typed_np_function(np.float32, np.int32)
     @wrappers.raw_tf_function(dynamic_dims=1)
@@ -159,7 +212,7 @@ def main(env, args):
     training = True
     while training:
         # Generate required number of episodes
-        for _ in range(args.evaluate_each // args.batch_size):
+        for _ in range(args.evaluate_each):   # // args.batch_size):
             episodes = []
             for _ in range(args.batch_size):
                 episodes.append(env.expert_episode())
