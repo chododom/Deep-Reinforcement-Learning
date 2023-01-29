@@ -52,7 +52,7 @@ class Network:
         encoded_input = tf.keras.layers.Concatenate()(
             [tf.one_hot(state[:, i], dim) for i, dim in enumerate(env.observation_space.nvec)])
         
-
+        
         # Generate a read key for memory read from the encoded input, by using
         # a ReLU hidden layer of size `args.hidden_layer` followed by a dense layer
         # with `args.memory_cell_size` units and `tanh` activation (to keep the memory
@@ -69,20 +69,22 @@ class Network:
         attention = tf.linalg.matvec(normalized_memory, normalized_read_keys)
         softmax = tf.nn.softmax(attention, axis=-1)
         read_value = tf.linalg.matvec(memory, softmax, transpose_a=True)
+            
     
-        
         # Using concatenated encoded input and the read value, use a ReLU hidden
         # layer of size `args.hidden_layer` followed by a dense layer with
         # `env.action_space.n` units and `softmax` activation to produce a policy.
-        policy = tf.concat([encoded_input, read_value], axis=-1)
-        policy = tf.keras.layers.Dense(args.hidden_layer, activation='relu')(policy)
+        policy = tf.keras.layers.Concatenate(axis=0)([encoded_input, read_value])
+        policy = tf.keras.layers.Dense(args.hidden_layer, activation='relu')(encoded_input)
         policy = tf.keras.layers.Dense(env.action_space.n, activation='softmax')(policy)
+        
         
         # Perform memory write. For faster convergence, append directly
         # the `encoded_input` to the memory, i.e., add it as a first memory row, and drop
         # the last memory row to keep memory size constant.
-        write_value = tf.expand_dims(encoded_input, axis=1)
-        updated_memory = tf.concat([write_value, memory[:, :-1]], axis=1)
+        
+        #TODO is the memory[0, :-1] ok?
+        updated_memory = tf.keras.layers.Concatenate(axis=0)([encoded_input, memory[0, :-1]])
 
         # Create the agent
         self._agent = tf.keras.Model(inputs=[memory, state], outputs=[updated_memory, policy])    
@@ -141,10 +143,12 @@ def main(env, args):
     def evaluate_episode(start_evaluation: bool = False, logging: bool = True) -> float:
         state, memory = env.reset(start_evaluation=start_evaluation, logging=logging)[0], network.zero_memory()
         rewards, done = 0, False
+        #print('-----')
         while not done:
             # Find out which action to use
+            #print('Before: \n', memory)
             memory, policy = network.predict([memory], [state])
-            #print(memory)
+            #print('After: \n', memory)
             action = np.argmax(policy)
             state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
