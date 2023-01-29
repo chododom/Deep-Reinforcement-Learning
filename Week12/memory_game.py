@@ -29,9 +29,9 @@ parser.add_argument("--render_each", default=0, type=int, help="Render some epis
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # If you add more arguments, ReCodEx will keep them with your default values.
-parser.add_argument("--batch_size", default=None, type=int, help="Number of episodes to train on.")
-parser.add_argument("--evaluate_each", default=None, type=int, help="Evaluate each number of episodes.")
-parser.add_argument("--evaluate_for", default=None, type=int, help="Evaluate for number of episodes.")
+parser.add_argument("--batch_size", default=128, type=int, help="Number of episodes to train on.")
+parser.add_argument("--evaluate_each", default=10, type=int, help="Evaluate each number of episodes.")
+parser.add_argument("--evaluate_for", default=5, type=int, help="Evaluate for number of episodes.")
 parser.add_argument("--hidden_layer", default=None, type=int, help="Hidden layer size; default 8*`cards`")
 parser.add_argument("--memory_cells", default=None, type=int, help="Number of memory cells; default 2*`cards`")
 parser.add_argument("--memory_cell_size", default=None, type=int, help="Memory cell size; default 3/2*`cards`")
@@ -41,43 +41,98 @@ class Network:
     def __init__(self, env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         self.args = args
         self.env = env
-
+        
         # Define the agent inputs: a memory and a state.
+        #memory = tf.keras.layers.Input(shape=[args.memory_cells, args.memory_cell_size], name='memory-input', dtype=tf.float32)
+        #state = tf.keras.layers.Input(shape=env.observation_space.shape, name='state-input', dtype=tf.int32)
         memory = tf.keras.layers.Input(shape=[args.memory_cells, args.memory_cell_size], dtype=tf.float32)
         state = tf.keras.layers.Input(shape=env.observation_space.shape, dtype=tf.int32)
-
         # Encode the input state, which is a (card, observation) pair,
         # by representing each element as one-hot and concatenating them, resulting
         # in a vector of length `sum(env.observation_space.nvec)`.
         encoded_input = tf.keras.layers.Concatenate()(
             [tf.one_hot(state[:, i], dim) for i, dim in enumerate(env.observation_space.nvec)])
-
-        # TODO: Generate a read key for memory read from the encoded input, by using
+        
+        """
+        mem = np.empty(shape=[args.memory_cells, args.memory_cell_size], dtype=np.float32)
+        st = np.empty(shape=env.observation_space.shape, dtype=np.int32)
+        
+        key = np.empty(shape=args.memory_cell_size, dtype=np.float32)
+        
+        for k in range(len(key)):
+            key[k] = tf.math.tanh(np.float32(np.random.randint(0, 10)))
+        
+        
+        normalized_memory = tf.math.l2_normalize(mem, axis=-1)
+        normalized_read_keys = tf.math.l2_normalize(key, axis=-1)
+        
+        #print(normalized_memory)
+        #print(normalized_read_keys)
+        
+        attention = tf.linalg.matvec(normalized_memory, normalized_read_keys)
+        softmax = tf.nn.softmax(attention, axis=-1)
+        
+        #print(softmax)
+        #print(memory)
+        
+        
+        read_value = tf.linalg.matvec(memory, softmax, transpose_a=True)
+        
+        enc_in = np.zeros(6)
+        write_val = np.expand_dims(enc_in, 0)
+        
+        up_mem = np.concatenate([write_val, mem[:-1]])
+        
+        #print(up_mem)
+        
+        raise Exception('End')"""
+        # Generate a read key for memory read from the encoded input, by using
         # a ReLU hidden layer of size `args.hidden_layer` followed by a dense layer
         # with `args.memory_cell_size` units and `tanh` activation (to keep the memory
         # content in limited range).
+        x = tf.keras.layers.Dense(args.hidden_layer, activation='relu')(encoded_input)
+        read_key = tf.keras.layers.Dense(args.memory_cell_size, activation='tanh')(x)
 
-        # TODO: Read the memory using the generated read key. Notably, compute cosine
+        # Read the memory using the generated read key. Notably, compute cosine
         # similarity of the key and every memory row, apply softmax to generate
         # a weight distribution over the rows, and finally take a weighted average of
         # the memory rows.
-
-        # TODO: Using concatenated encoded input and the read value, use a ReLU hidden
+        normalized_memory = tf.math.l2_normalize(memory, axis=-1)
+        normalized_read_keys = tf.math.l2_normalize(read_key, axis=-1)
+        attention = tf.linalg.matvec(normalized_memory, normalized_read_keys)
+        softmax = tf.nn.softmax(attention, axis=-1)
+        read_value = tf.linalg.matvec(memory, softmax, transpose_a=True)
+    
+        
+        # Using concatenated encoded input and the read value, use a ReLU hidden
         # layer of size `args.hidden_layer` followed by a dense layer with
         # `env.action_space.n` units and `softmax` activation to produce a policy.
+        policy = tf.concat([encoded_input, read_value], axis=-1)
+        policy = tf.keras.layers.Dense(args.hidden_layer, activation='relu')(policy)
+        policy = tf.keras.layers.Dense(env.action_space.n, activation='softmax')(policy) #FIX
+        
 
-        # TODO: Perform memory write. For faster convergence, append directly
+        # Perform memory write. For faster convergence, append directly
         # the `encoded_input` to the memory, i.e., add it as a first memory row, and drop
         # the last memory row to keep memory size constant.
+        
+        
+        #TODO maybe check if this really pushes the vector to the same place each time 
+        #not necessarily front
+        write_value = tf.expand_dims(encoded_input, axis=1)        
+        updated_memory = tf.concat([write_value, memory[:, :-1]], axis=1)
 
         # Create the agent
-        self._agent = tf.keras.Model(inputs=[memory, state], outputs=[updated_memory, policy])
+        self._agent = tf.keras.Model(inputs=[memory, state], outputs=[updated_memory, policy])        
         self._agent.compile(optimizer=tf.optimizers.Adam(), loss=tf.losses.SparseCategoricalCrossentropy())
+        #self._agent.summary()
+
 
     def zero_memory(self):
-        # TODO: Return an empty memory. It should be a TF tensor
+        # Return an empty memory. It should be a TF tensor
         # with shape `[self.args.memory_cells, self.args.memory_cell_size]`.
-        raise NotImplementedError()
+        memory = tf.zeros(shape=[self.args.memory_cells, self.args.memory_cell_size])
+        return memory
 
     @tf.function
     def _train(self, states, targets):
@@ -93,6 +148,7 @@ class Network:
         raise NotImplementedError()
 
     def train(self, episodes):
+        print(episodes)
         # TODO: Given a list of episodes, prepare the arguments
         # of the self._train method, and execute it.
         raise NotImplementedError()
@@ -126,8 +182,9 @@ def main(env, args):
         state, memory = env.reset(start_evaluation=start_evaluation, logging=logging)[0], network.zero_memory()
         rewards, done = 0, False
         while not done:
-            # TODO: Find out which action to use
-            action = ...
+            # Find out which action to use
+            memory, policy = network.predict(memory, state)
+            action = np.argmax(policy)
             state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             rewards += reward
