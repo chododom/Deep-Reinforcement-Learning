@@ -43,7 +43,7 @@ class Network:
         self.env = env
         
         # Define the agent inputs: a memory and a state.
-        memory = tf.keras.layers.Input(shape=[args.memory_cells, args.memory_cell_size], dtype=tf.float32)
+        memory = tf.keras.layers.Input(shape=[args.memory_cells, args.memory_cell_size], dtype=tf.float32)                
         state = tf.keras.layers.Input(shape=env.observation_space.shape, dtype=tf.int32)
 
         # Encode the input state, which is a (card, observation) pair,
@@ -81,14 +81,11 @@ class Network:
         # Perform memory write. For faster convergence, append directly
         # the `encoded_input` to the memory, i.e., add it as a first memory row, and drop
         # the last memory row to keep memory size constant.
-        
-        # Uncomment following two lines after shape mismatch FIX
-        #write_value = tf.expand_dims(encoded_input, axis=1)
-        #updated_memory = tf.concat([write_value, memory[:, :-1]], axis=1)
+        write_value = tf.expand_dims(encoded_input, axis=1)
+        updated_memory = tf.concat([write_value, memory[:, :-1]], axis=1)
 
         # Create the agent
-        # Use updated memory as output after shape mismatch FIX
-        self._agent = tf.keras.Model(inputs=[memory, state], outputs=[memory, policy])    
+        self._agent = tf.keras.Model(inputs=[memory, state], outputs=[updated_memory, policy])    
         self._agent.compile(optimizer=tf.optimizers.Adam(), loss=tf.losses.SparseCategoricalCrossentropy())
         #self._agent.summary()
 
@@ -112,7 +109,6 @@ class Network:
         raise NotImplementedError()
 
     def train(self, episodes):
-        print(episodes)
         # TODO: Given a list of episodes, prepare the arguments
         # of the self._train method, and execute it.
         raise NotImplementedError()
@@ -147,12 +143,12 @@ def main(env, args):
         rewards, done = 0, False
         while not done:
             # Find out which action to use
-            memory, policy = network.predict(memory, state)
+            memory, policy = network.predict([memory], [state])
+            #print(memory)
             action = np.argmax(policy)
             state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             rewards += reward
-            raise Exception('Remove this exception after fix of shape mismatch')
         return rewards
 
     # Training
