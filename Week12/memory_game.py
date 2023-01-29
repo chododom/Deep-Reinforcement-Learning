@@ -43,49 +43,16 @@ class Network:
         self.env = env
         
         # Define the agent inputs: a memory and a state.
-        #memory = tf.keras.layers.Input(shape=[args.memory_cells, args.memory_cell_size], name='memory-input', dtype=tf.float32)
-        #state = tf.keras.layers.Input(shape=env.observation_space.shape, name='state-input', dtype=tf.int32)
         memory = tf.keras.layers.Input(shape=[args.memory_cells, args.memory_cell_size], dtype=tf.float32)
         state = tf.keras.layers.Input(shape=env.observation_space.shape, dtype=tf.int32)
+
         # Encode the input state, which is a (card, observation) pair,
         # by representing each element as one-hot and concatenating them, resulting
         # in a vector of length `sum(env.observation_space.nvec)`.
         encoded_input = tf.keras.layers.Concatenate()(
             [tf.one_hot(state[:, i], dim) for i, dim in enumerate(env.observation_space.nvec)])
         
-        """
-        mem = np.empty(shape=[args.memory_cells, args.memory_cell_size], dtype=np.float32)
-        st = np.empty(shape=env.observation_space.shape, dtype=np.int32)
-        
-        key = np.empty(shape=args.memory_cell_size, dtype=np.float32)
-        
-        for k in range(len(key)):
-            key[k] = tf.math.tanh(np.float32(np.random.randint(0, 10)))
-        
-        
-        normalized_memory = tf.math.l2_normalize(mem, axis=-1)
-        normalized_read_keys = tf.math.l2_normalize(key, axis=-1)
-        
-        #print(normalized_memory)
-        #print(normalized_read_keys)
-        
-        attention = tf.linalg.matvec(normalized_memory, normalized_read_keys)
-        softmax = tf.nn.softmax(attention, axis=-1)
-        
-        #print(softmax)
-        #print(memory)
-        
-        
-        read_value = tf.linalg.matvec(memory, softmax, transpose_a=True)
-        
-        enc_in = np.zeros(6)
-        write_val = np.expand_dims(enc_in, 0)
-        
-        up_mem = np.concatenate([write_val, mem[:-1]])
-        
-        #print(up_mem)
-        
-        raise Exception('End')"""
+
         # Generate a read key for memory read from the encoded input, by using
         # a ReLU hidden layer of size `args.hidden_layer` followed by a dense layer
         # with `args.memory_cell_size` units and `tanh` activation (to keep the memory
@@ -109,21 +76,19 @@ class Network:
         # `env.action_space.n` units and `softmax` activation to produce a policy.
         policy = tf.concat([encoded_input, read_value], axis=-1)
         policy = tf.keras.layers.Dense(args.hidden_layer, activation='relu')(policy)
-        policy = tf.keras.layers.Dense(env.action_space.n, activation='softmax')(policy) #FIX
+        policy = tf.keras.layers.Dense(env.action_space.n, activation='softmax')(policy)
         
-
         # Perform memory write. For faster convergence, append directly
         # the `encoded_input` to the memory, i.e., add it as a first memory row, and drop
         # the last memory row to keep memory size constant.
         
-        
-        #TODO maybe check if this really pushes the vector to the same place each time 
-        #not necessarily front
-        write_value = tf.expand_dims(encoded_input, axis=1)        
-        updated_memory = tf.concat([write_value, memory[:, :-1]], axis=1)
+        # Uncomment following two lines after shape mismatch FIX
+        #write_value = tf.expand_dims(encoded_input, axis=1)
+        #updated_memory = tf.concat([write_value, memory[:, :-1]], axis=1)
 
         # Create the agent
-        self._agent = tf.keras.Model(inputs=[memory, state], outputs=[updated_memory, policy])        
+        # Use updated memory as output after shape mismatch FIX
+        self._agent = tf.keras.Model(inputs=[memory, state], outputs=[memory, policy])    
         self._agent.compile(optimizer=tf.optimizers.Adam(), loss=tf.losses.SparseCategoricalCrossentropy())
         #self._agent.summary()
 
@@ -131,8 +96,7 @@ class Network:
     def zero_memory(self):
         # Return an empty memory. It should be a TF tensor
         # with shape `[self.args.memory_cells, self.args.memory_cell_size]`.
-        memory = tf.zeros(shape=[self.args.memory_cells, self.args.memory_cell_size])
-        return memory
+        return tf.zeros(shape=[self.args.memory_cells, self.args.memory_cell_size])
 
     @tf.function
     def _train(self, states, targets):
@@ -188,6 +152,7 @@ def main(env, args):
             state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             rewards += reward
+            raise Exception('Remove this exception after fix of shape mismatch')
         return rewards
 
     # Training
