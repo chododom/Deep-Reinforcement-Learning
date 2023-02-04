@@ -29,7 +29,7 @@ parser.add_argument("--render_each", default=0, type=int, help="Render some epis
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # If you add more arguments, ReCodEx will keep them with your default values.
-parser.add_argument("--batch_size", default=1, type=int, help="Number of episodes to train on.")
+parser.add_argument("--batch_size", default=2, type=int, help="Number of episodes to train on.")
 parser.add_argument("--evaluate_each", default=50, type=int, help="Evaluate each number of episodes.")
 parser.add_argument("--evaluate_for", default=5, type=int, help="Evaluate for number of episodes.")
 parser.add_argument("--hidden_layer", default=None, type=int, help="Hidden layer size; default 8*`cards`")
@@ -66,16 +66,16 @@ class Network:
         # the memory rows.
         normalized_memory = tf.math.l2_normalize(memory, axis=-1)
         normalized_read_keys = tf.math.l2_normalize(read_key, axis=-1)
-        attention = tf.linalg.matvec(normalized_memory, normalized_read_keys)
-        softmax = tf.nn.softmax(attention, axis=-1)
+        matvec = tf.linalg.matvec(normalized_memory, normalized_read_keys)
+        softmax = tf.nn.softmax(matvec, axis=-1)
         read_value = tf.linalg.matvec(memory, softmax, transpose_a=True)
             
     
         # Using concatenated encoded input and the read value, use a ReLU hidden
         # layer of size `args.hidden_layer` followed by a dense layer with
         # `env.action_space.n` units and `softmax` activation to produce a policy.
-        policy = tf.keras.layers.Concatenate(axis=0)([encoded_input, read_value])
-        policy = tf.keras.layers.Dense(args.hidden_layer, activation='relu')(encoded_input)
+        policy = tf.keras.layers.Concatenate(axis=1)([encoded_input, read_value])
+        policy = tf.keras.layers.Dense(args.hidden_layer, activation='relu')(policy)
         policy = tf.keras.layers.Dense(env.action_space.n, activation='softmax')(policy)
         
         
@@ -110,39 +110,37 @@ class Network:
         # (one possibility is to add another parameter to `_train`).
         # It is possible to use Ragged Tensors.
      
-        """
+        losses = []
         with tf.GradientTape() as tape:
-            memories = [tf.zeros(shape=[self.args.memory_cells, self.args.memory_cell_size]) for x in range(len(states))]
+            for state_seq, target_seq in zip(states, targets):
+                memory = tf.zeros(shape=[self.args.memory_cells, self.args.memory_cell_size])
+                loss = 0.0
+                for s, t in zip(state_seq, target_seq):
+                    if t is None:
+                        continue
+                    memory, policy = self.predict([memory], [s])
+                    loss += self._agent.loss(t, policy)
+                losses.append(loss)
+        
+        l = tf.math.reduce_mean(losses)
+        print(loss)
+        #self._agent.optimizer.minimize(loss, self._agent.trainable_variables, tape=tape)
+     
+        """
+        memories = [tf.zeros(shape=[self.args.memory_cells, self.args.memory_cell_size]) for x in range(len(states))]
+        with tf.GradientTape() as tape:
             overall_losses = [0.0 for x in range(len(states))]
             for step in range(max(lengths)-1):
                 memories[step], policies = self.predict([memories[step]], states[step])
+                
+                print(targets[step])
+                print(policies)
+                
                 curr_losses = self._agent.loss(targets[step], policies)
                 overall_losses = tf.math.add(overall_losses, curr_losses)
             loss = tf.math.reduce_mean(overall_losses)
-            
-        self._agent.optimizer.minimize(loss, self._agent.trainable_variables, tape=tape)
         """
-        """
-        memories = [tf.zeros(shape=[self.args.memory_cells, self.args.memory_cell_size]) for x in range(len(states))]
-        overall_losses = [0.0 for x in range(len(states))]
-        for step in range(max(lengths)):
-            memories[step], policies = self.predict([memories[step]], states[step])
-            curr_losses = self._agent.loss(targets[step], policies)
-            overall_losses = tf.math.add(overall_losses, curr_losses)"""
-            
-            
-            
-        """
-        with tf.GradientTape() as tape:
-            memory = tf.zeros(shape=[self.args.memory_cells, self.args.memory_cell_size])
-            loss = 0 
-            for state, target_action in zip(states, targets):
-                if target_action is None:
-                    break
-                memory, policy = self.predict([memory], [state])
-                loss += self._agent.loss(target_action, policy)
-            
-        self._agent.optimizer.minimize(loss, self._agent.trainable_variables, tape=tape)"""
+           
             
 
     def train(self, episodes):
@@ -151,6 +149,16 @@ class Network:
         
         state_batches, action_batches, episode_lengths = [], [], [len(e) for e in episodes]
         max_len = max(episode_lengths)
+        
+        for e in episodes:
+            states, actions = [], []
+            for state, action in e:
+                states.append(state)
+                actions.append(action)
+            state_batches.append(states)
+            action_batches.append(actions)
+        
+        """
         for step in range(max_len):
             states, actions = [], []
             for episode in episodes:
@@ -162,7 +170,7 @@ class Network:
                     states.append(None)
                     actions.append(None)
             state_batches.append(states)
-            action_batches.append(actions)
+            action_batches.append(actions)"""
                     
         self._train(state_batches, action_batches, episode_lengths)
         raise Exception('STOP after one episode')
