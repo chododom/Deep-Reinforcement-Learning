@@ -29,7 +29,7 @@ parser.add_argument("--render_each", default=0, type=int, help="Render some epis
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
 parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
 # If you add more arguments, ReCodEx will keep them with your default values.
-parser.add_argument("--batch_size", default=2, type=int, help="Number of episodes to train on.")
+parser.add_argument("--batch_size", default=64, type=int, help="Number of episodes to train on.")
 parser.add_argument("--evaluate_each", default=50, type=int, help="Evaluate each number of episodes.")
 parser.add_argument("--evaluate_for", default=5, type=int, help="Evaluate for number of episodes.")
 parser.add_argument("--hidden_layer", default=None, type=int, help="Hidden layer size; default 8*`cards`")
@@ -83,8 +83,9 @@ class Network:
         # the `encoded_input` to the memory, i.e., add it as a first memory row, and drop
         # the last memory row to keep memory size constant.
         
-        #TODO is the memory[0, :-1] ok?
-        updated_memory = tf.keras.layers.Concatenate(axis=0)([encoded_input, memory[0, :-1]])
+        mem = tf.reshape(memory[0, :-1], (1, -1))
+        updated_memory = tf.keras.layers.Concatenate(axis=1)([encoded_input, mem])
+        updated_memory = tf.reshape(updated_memory, (self.args.memory_cells, self.args.memory_cell_size))
 
         # Create the agent
         self._agent = tf.keras.Model(inputs=[memory, state], outputs=[updated_memory, policy])    
@@ -122,25 +123,9 @@ class Network:
                     loss += self._agent.loss(t, policy)
                 losses.append(loss)
         
-        l = tf.math.reduce_mean(losses)
-        print(loss)
-        #self._agent.optimizer.minimize(loss, self._agent.trainable_variables, tape=tape)
-     
-        """
-        memories = [tf.zeros(shape=[self.args.memory_cells, self.args.memory_cell_size]) for x in range(len(states))]
-        with tf.GradientTape() as tape:
-            overall_losses = [0.0 for x in range(len(states))]
-            for step in range(max(lengths)-1):
-                memories[step], policies = self.predict([memories[step]], states[step])
-                
-                print(targets[step])
-                print(policies)
-                
-                curr_losses = self._agent.loss(targets[step], policies)
-                overall_losses = tf.math.add(overall_losses, curr_losses)
-            loss = tf.math.reduce_mean(overall_losses)
-        """
-           
+        reduced_loss = tf.math.reduce_mean(losses)
+        self._agent.optimizer.minimize(reduced_loss, self._agent.trainable_variables, tape=tape)
+        
             
 
     def train(self, episodes):
@@ -158,22 +143,8 @@ class Network:
             state_batches.append(states)
             action_batches.append(actions)
         
-        """
-        for step in range(max_len):
-            states, actions = [], []
-            for episode in episodes:
-                if step < len(episode):
-                    s, a = episode[step]
-                    states.append(s)
-                    actions.append(a)
-                else:
-                    states.append(None)
-                    actions.append(None)
-            state_batches.append(states)
-            action_batches.append(actions)"""
                     
         self._train(state_batches, action_batches, episode_lengths)
-        raise Exception('STOP after one episode')
         
 
     @wrappers.typed_np_function(np.float32, np.int32)
