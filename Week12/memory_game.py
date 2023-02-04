@@ -118,7 +118,7 @@ class Network:
                 loss = 0.0
                 for s, t in zip(state_seq, target_seq):
                     if t is None:
-                        continue
+                        break
                     memory, policy = self.predict([memory], [s])
                     loss += self._agent.loss(t, policy)
                 losses.append(loss)
@@ -137,9 +137,13 @@ class Network:
         
         for e in episodes:
             states, actions = [], []
-            for state, action in e:
-                states.append(state)
-                actions.append(action)
+            for step in range(max_len):
+                if step < len(e):
+                    states.append(e[step][0])
+                    actions.append(e[step][1])
+                else:
+                    states.append(None)
+                    actions.append(None)
             state_batches.append(states)
             action_batches.append(actions)
         
