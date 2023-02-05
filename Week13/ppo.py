@@ -11,6 +11,7 @@
 # 8c8b5f62-9f3e-4825-9966-185987537e3f
 import argparse
 import os
+
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Report only TF errors by default
 
 import gym
@@ -20,28 +21,31 @@ import tensorflow as tf
 import multi_collect_environment
 import wrappers
 
+# tf.config.run_functions_eagerly(True)
+# tf.data.experimental.enable_debug_mode()
+
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--render_each", default=0, type=int, help="Render some episodes.")
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
-parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
+parser.add_argument("--threads", default=8, type=int, help="Maximum number of threads to use.")
 # For these and any other arguments you add, ReCodEx will keep your default value.
-parser.add_argument("--batch_size", default=None, type=int, help="Batch size.")
-parser.add_argument("--clip_epsilon", default=None, type=float, help="Clipping epsilon.")
-parser.add_argument("--entropy_regularization", default=0.1, type=float, help="Entropy regularization weight.")
-parser.add_argument("--envs", default=None, type=int, help="Workers during experience collection.")
-parser.add_argument("--epochs", default=None, type=int, help="Epochs to train each iteration.")
-parser.add_argument("--evaluate_each", default=10, type=int, help="Evaluate each given number of iterations.")
+parser.add_argument("--batch_size", default=64, type=int, help="Batch size.")
+parser.add_argument("--clip_epsilon", default=0.2, type=float, help="Clipping epsilon.")
+parser.add_argument("--entropy_regularization", default=0.05, type=float, help="Entropy regularization weight.")
+parser.add_argument("--envs", default=12, type=int, help="Workers during experience collection.")
+parser.add_argument("--epochs", default=5, type=int, help="Epochs to train each iteration.")
+parser.add_argument("--evaluate_each", default=50, type=int, help="Evaluate each given number of iterations.")
 parser.add_argument("--evaluate_for", default=10, type=int, help="Evaluate the given number of episodes.")
-parser.add_argument("--gamma", default=None, type=float, help="Discounting factor.")
+parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
 parser.add_argument("--hidden_layer_size", default=50, type=int, help="Size of hidden layer.")
 parser.add_argument("--learning_rate", default=0.001, type=float, help="Learning rate.")
-parser.add_argument("--trace_lambda", default=None, type=float, help="Traces factor lambda.")
-parser.add_argument("--worker_steps", default=None, type=int, help="Steps for each worker to perform.")
+parser.add_argument("--trace_lambda", default=0.95, type=float, help="Traces factor lambda.")
+parser.add_argument("--worker_steps", default=80, type=int, help="Steps for each worker to perform.")
 
 
-# TODO: Note that this time we derive the Network directly from `tf.keras.Model`.
+# Note that this time we derive the Network directly from `tf.keras.Model`.
 # The reason is that the high-level Keras API is useful in PPO, where we need
 # to train on an unchanging dataset (generated batches, train for several epochs, ...).
 # That means that:
@@ -57,14 +61,19 @@ class Network(tf.keras.Model):
         # Create a suitable model for the given observation and action spaces.
         inputs = tf.keras.layers.Input(observation_space.shape)
 
-        # TODO: Using a single hidden layer with args.hidden_layer_size and ReLU activation,
+        # Using a single hidden layer with args.hidden_layer_size and ReLU activation,
         # produce a policy with `action_space.n` discrete actions.
-        policy = ...
+        policy = tf.keras.layers.Dense(args.hidden_layer_size, activation='relu')(inputs)
+        # policy = tf.keras.layers.Dropout(0.3)(policy)
+        policy = tf.keras.layers.Dense(action_space.n, activation='softmax')(policy)
 
-        # TODO: Using an independent single hidden layer with args.hidden_layer_size and ReLU activation,
+        # Using an independent single hidden layer with args.hidden_layer_size and ReLU activation,
         # produce a value function estimate. It is best to generate it as a scalar, not
         # a vector of length one, to avoid broadcasting errors later.
-        value = ...
+        value = tf.keras.layers.Dense(args.hidden_layer_size, activation='relu')(inputs)
+        # value = tf.keras.layers.Dropout(0.3)(value)
+        value = tf.keras.layers.Dense(1)(value)
+        value = tf.squeeze(value)
 
         # Construct the model
         super().__init__(inputs=inputs, outputs=[policy, value])
@@ -72,7 +81,7 @@ class Network(tf.keras.Model):
         # Compile using Adam optimizer with the given learning rate.
         self.compile(optimizer=tf.optimizers.Adam(args.learning_rate))
 
-    # TODO: Define a training method `train_step`, which is automatically used by Keras.
+    # Define a training method `train_step`, which is automatically used by Keras.
     def train_step(self, data):
         # Unwrap the data. The targets is a dictionary of several tensors, containing keys
         # - "actions"
@@ -84,13 +93,30 @@ class Network(tf.keras.Model):
             # Compute the policy and the value function
             policy, value = self(states, training=True)
 
-            # TODO: Sum the following three losses
+            # Sum the following three losses:
             # - the PPO loss, where `self.args.clip_epsilon` is used to clip the probability ratio
-            # - the MSE error between the predicted value function and target regurns
+            # - the MSE error between the predicted value function and target returns
             # - the entropy regularization with coefficient `self.args.entropy_regularization`.
             #   You can compute it for example using `tf.losses.CategoricalCrossentropy()`
             #   by realizing that entropy can be computed using cross-entropy.
-            loss = ...
+            new_probs = tf.gather(policy, targets['actions'], batch_dims=1, axis=1)
+            # Division with probabilities can lead to NaNs.
+            ppo_ratios = tf.math.exp(tf.math.log(new_probs) - tf.math.log(targets['action_probs']))
+            ppo_ratios_clipped = tf.clip_by_value(ppo_ratios, 1 - self.args.clip_epsilon, 1 + self.args.clip_epsilon)
+            ppo_loss = -tf.reduce_mean(tf.minimum(
+                ppo_ratios * targets['advantages'],
+                ppo_ratios_clipped * targets['advantages']
+            ))
+
+            critic_loss = tf.reduce_mean(tf.square(value - targets['returns']))
+
+            # print(policy)
+            entropy_loss = tf.keras.losses.CategoricalCrossentropy()(policy, policy)
+            # entropy_loss = -tf.reduce_mean(-tf.reduce_sum(policy * tf.math.log(policy), axis=1))
+            # print(entropy_loss)
+
+            # print(ppo_loss, critic_loss, entropy_loss)
+            loss = ppo_loss + critic_loss - args.entropy_regularization * entropy_loss
 
         # Perform an optimizer step and return the loss for reporting and visualization.
         self.optimizer.minimize(loss, self.trainable_variables, tape=tape)
@@ -116,8 +142,10 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     def evaluate_episode(start_evaluation: bool = False, logging: bool = True) -> float:
         rewards, state, done = 0, env.reset(start_evaluation=start_evaluation, logging=logging)[0], False
         while not done:
-            # TODO: Predict the action using the greedy policy
-            action = ...
+            # Predict the action using the greedy policy
+            # TODO: Maybe wrong shape
+            policy = network.predict([state])[0]
+            action = np.argmax(policy)
             state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             rewards += reward
@@ -134,26 +162,49 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         # Collect experience. Notably, we collect the following quantities
         # as tensors with the first two dimensions `[args.worker_steps, args.envs]`.
         states, actions, action_probs, rewards, dones, values = [], [], [], [], [], []
+        # print(iteration)
         for _ in range(args.worker_steps):
-            # TODO: Choose `action`, which is a vector of `args.envs` actions, each
+            # Choose `action`, which is a vector of `args.envs` actions, each
             # sampled from the corresponding policy generated by the `network.predict`
             # executed on the vector `state`.
-            action = ...
-
+            policy, value = network.predict(state)
+            action = [np.random.choice(len(probs), p=probs) for probs in policy]
+            action_prob = policy[np.arange(len(action)), action]
             # Perform the step
             next_state, reward, terminated, truncated, _ = venv.step(action)
             done = terminated | truncated
 
-            # TODO: Collect the required quantities
-            ...
+            # Collect the required quantities
+            for collection, new_entry in zip([states, actions, action_probs, rewards, dones, values],
+                                             [state, action, action_prob, reward, done, value]):
+                collection.append(new_entry)
 
             state = next_state
 
-        # TODO: Estimate `advantages` and `returns` (they differ only by the value function estimate)
+        # Estimate `advantages` and `returns` (they differ only by the value function estimate)
         # using lambda-return with coefficients `args.trace_lambda` and `args.gamma`.
         # You need to process episodes of individual workers independently, and note that
         # each worker might have generated multiple episodes, the last one probably unfinished.
-        advantages, returns = ...
+        states, actions, action_probs, rewards, dones, values = (
+            np.array(collection) for collection in [states, actions, action_probs, rewards, dones, values]
+        )
+        # Artificially mark the last state as done (truncated) for purposes of computing advantages.
+        dones[-1] = True
+
+        # Compute deltas.
+        deltas = rewards - values
+        deltas[:-1] += (1 - dones[:-1]) * args.gamma * values[1:]
+
+        # Compute advantages and returns.
+        advantages = np.zeros((args.worker_steps, args.envs))
+        for i in range(args.envs):
+            ep_end = np.argmax(dones[:, i])
+            for t in range(args.worker_steps):
+                coeffs = (args.gamma * args.trace_lambda) ** (np.arange(ep_end - t))
+                advantages[t, i] = np.dot(deltas[t:ep_end, i], coeffs)
+                if dones[t, i] and t != args.worker_steps - 1:  # No more data left.
+                    ep_end = ep_end + np.argmax(dones[t + 1:, i]) + 1
+        returns = advantages + values
 
         # Train using the Keras API.
         # - The below code assumes that the first two dimensions of the used quantities are
