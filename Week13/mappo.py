@@ -39,8 +39,8 @@ parser.add_argument("--gamma", default=0.99, type=float, help="Discounting facto
 parser.add_argument("--hidden_layer_size", default=50, type=int, help="Size of hidden layer.")
 parser.add_argument("--learning_rate", default=3e-4, type=float, help="Learning rate.")
 parser.add_argument("--trace_lambda", default=0.95, type=float, help="Traces factor lambda.")
-parser.add_argument("--worker_steps", default=50, type=int, help="Steps for each worker to perform.")
-parser.add_argument("--model_path", default=None, type=str, help="Path to a pre-trained model.")
+parser.add_argument("--worker_steps", default=80, type=int, help="Steps for each worker to perform.")
+parser.add_argument("--model_path", default='mappo_model_504', type=str, help="Path to a pre-trained model.")
 
 
 # We use the exactly same Network as in the `ppo` assignment.
