@@ -235,7 +235,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
             if iteration % args.evaluate_each == 0:
                 scores = [evaluate_episode() for _ in range(args.evaluate_for)]
                 scores_avg = np.mean(scores)
-                if scores_avg > max(current_best, -1300):
+                if scores_avg > max(current_best, 0):
                     current_best = scores_avg
                     for i in range(args.agents):
                         model_name = f'mappo_model_{int(current_best)}_{i}.h5'
