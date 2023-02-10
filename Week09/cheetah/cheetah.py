@@ -42,6 +42,9 @@ class Network:
         # `tfp.distributions` does not play nice with functional models) and because
         # we need the `alpha` variable, we use subclassing to create the actor.
         self.target_entropy = args.target_entropy * env.action_space.shape[0]
+        self._log_alpha = tf.Variable(np.log(0.1), dtype=tf.float32)
+        self._alpha_optimizer = tf.optimizers.Adam(args.learning_rate)
+
         class Actor(tf.keras.Model):
             def __init__(self, hidden_layer_size: int):
                 super().__init__()
@@ -50,10 +53,9 @@ class Network:
                 # - a layer for generating means with `env.action_space.shape[0]` units and no activation
                 # - a layer for generating sds with `env.action_space.shape[0]` units and `tf.math.exp` activation
                 # - finally, create a variable representing a logarithm of alpha, using for example the following:
-                self.log_alpha = tf.Variable(np.log(0.1), dtype=tf.float32)
                 self.hidden_layers = [
-                    tf.keras.layers.Dense(hidden_layer_size, activation='relu'),
-                    tf.keras.layers.Dense(hidden_layer_size, activation='relu')
+                    tf.keras.layers.Dense(hidden_layer_size, activation=tf.nn.relu),
+                    tf.keras.layers.Dense(hidden_layer_size, activation=tf.nn.relu)
                 ]
                 self.mean_layer = tf.keras.layers.Dense(env.action_space.shape[0], activation=None)
                 self.sd_layer = tf.keras.layers.Dense(env.action_space.shape[0], activation=tf.math.exp)
@@ -100,15 +102,16 @@ class Network:
                 if sample:
                     action_dist = tfp.distributions.Normal(loc=mus, scale=sds)
                 else:
-                    action_dist = tfp.distributions.Normal(loc=mus, scale=0.0)
+                    action_dist = tfp.distributions.Normal(loc=mus, scale=tf.zeros_like(sds))
                 action_dist = tfp.bijectors.Tanh()(action_dist)
                 action_dist = tfp.bijectors.Scale((env.action_space.high - env.action_space.low) / 2)(action_dist)
                 action_dist = tfp.bijectors.Shift((env.action_space.high + env.action_space.low) / 2)(action_dist)
                 actions = action_dist.sample()
                 log_probs = action_dist.log_prob(actions)
-                log_probs = tf.reduce_mean(log_probs, axis=-1)
-                alpha = tf.math.exp(self.log_alpha)
-                return actions, log_probs, alpha
+                log_probs = tf.reduce_mean(log_probs, axis=1)
+                # alpha = tf.math.exp(self.log_alpha)
+                # return actions, log_probs, alpha
+                return actions, log_probs
 
         # Instantiate the actor as `self._actor` and compile it.
         self._actor = Actor(args.hidden_layer_size)
@@ -124,8 +127,8 @@ class Network:
         observations = tf.keras.Input(shape=env.observation_space.shape)
         actions = tf.keras.Input(shape=env.action_space.shape)
         x = tf.keras.layers.Concatenate()([observations, actions])
-        x = tf.keras.layers.Dense(args.hidden_layer_size, activation='relu')(x)
-        x = tf.keras.layers.Dense(args.hidden_layer_size, activation='relu')(x)
+        x = tf.keras.layers.Dense(args.hidden_layer_size, activation=tf.nn.relu)(x)
+        x = tf.keras.layers.Dense(args.hidden_layer_size, activation=tf.nn.relu)(x)
         output = tf.keras.layers.Dense(1)(x)
         critic = tf.keras.Model(inputs=[observations, actions], outputs=output)
         self._critic1 = critic
@@ -134,8 +137,10 @@ class Network:
         self._target_critic1 = tf.keras.models.clone_model(critic)
         self._target_critic2 = tf.keras.models.clone_model(critic)
 
-        self._critic1.compile(optimizer=tf.keras.optimizers.Adam(args.learning_rate))
-        self._critic2.compile(optimizer=tf.keras.optimizers.Adam(args.learning_rate))
+        self._critic1.compile(optimizer=tf.keras.optimizers.Adam(args.learning_rate),
+                              loss=tf.keras.losses.MeanSquaredError())
+        self._critic2.compile(optimizer=tf.keras.optimizers.Adam(args.learning_rate),
+                              loss=tf.keras.losses.MeanSquaredError())
 
     def save_actor(self, path: str):
         # Because we use subclassing for creating the actor, the easiest way of
@@ -165,26 +170,35 @@ class Network:
         # average with weight `args.target_tau`, using something like
         #   for var, target_var in zip(critic.trainable_variables, target_critic.trainable_variables):
         #       target_var.assign(target_var * (1 - target_tau) + var * target_tau)
+        with tf.GradientTape() as critic1_tape:
+            predicted_values = self._critic1([states, actions])
+            critic1_loss = tf.keras.losses.MeanSquaredError()(returns, predicted_values)
+        critic1_grads = critic1_tape.gradient(critic1_loss, self._critic1.trainable_weights)
+        self._critic1.optimizer.apply_gradients(zip(critic1_grads, self._critic1.trainable_weights))
+
+        with tf.GradientTape() as critic2_tape:
+            predicted_values = self._critic2([states, actions])
+            critic2_loss = tf.keras.losses.MeanSquaredError()(returns, predicted_values)
+        critic2_grads = critic2_tape.gradient(critic2_loss, self._critic2.trainable_weights)
+        self._critic2.optimizer.apply_gradients(zip(critic2_grads, self._critic2.trainable_weights))
+
+        alpha = tf.math.exp(self._log_alpha)
         with tf.GradientTape() as actor_tape:
-            with tf.GradientTape() as alpha_tape:
-                act, log_probs, alpha = self._actor(states, sample=True)
-                value = tf.minimum(
-                    self._critic1([states, act]),
-                    self._critic2([states, act])
-                )
-                actor_loss = tf.reduce_mean(tf.stop_gradient(alpha) * log_probs - value)
-                alpha_loss = -tf.reduce_mean(alpha * (tf.stop_gradient(log_probs) + self.target_entropy))
+            act, log_probs = self._actor(states, sample=True)
+            value = tf.minimum(
+                self._critic1([states, act]),
+                self._critic2([states, act])
+            )
+            actor_loss = tf.reduce_mean(alpha * log_probs - value)
         actor_grads = actor_tape.gradient(actor_loss, self._actor.trainable_weights)
         self._actor.optimizer.apply_gradients(zip(actor_grads, self._actor.trainable_weights))
-        alpha_grads = alpha_tape.gradient(alpha_loss, self._actor.trainable_weights)
-        self._actor.optimizer.apply_gradients(zip(alpha_grads, self._actor.trainable_weights))
 
-        for critic in [self._critic1, self._critic2]:
-            with tf.GradientTape() as critic_tape:
-                predicted_values = critic([states, actions])
-                critic_loss = tf.keras.losses.MeanSquaredError()(returns, predicted_values)
-            critic_grads = critic_tape.gradient(critic_loss, critic.trainable_weights)
-            critic.optimizer.apply_gradients(zip(critic_grads, critic.trainable_weights))
+        with tf.GradientTape() as alpha_tape:
+            alpha = tf.math.exp(self._log_alpha)
+            act, log_probs = self._actor(states, sample=True)
+            alpha_loss = tf.reduce_mean(-alpha * (log_probs + self.target_entropy))
+        alpha_grads = alpha_tape.gradient(alpha_loss, [self._log_alpha])
+        self._alpha_optimizer.apply_gradients(zip(alpha_grads, [self._log_alpha]))
 
         for var, target_var in zip(self._critic1.trainable_variables, self._target_critic1.trainable_variables):
             target_var.assign(target_var * (1 - args.target_tau) + var * args.target_tau)
@@ -206,15 +220,16 @@ class Network:
         return self._actor(states, sample=True)[0]
 
     @wrappers.typed_np_function(np.float32)
-    @wrappers.raw_tf_function(dynamic_dims=1)
+    # @wrappers.raw_tf_function(dynamic_dims=1)
     def predict_values(self, states: np.ndarray) -> np.ndarray:
         # Produce the predicted returns, which are the minimum of
         #    target_critic(s, a) - alpha * log_prob
         #  considering both target critics and actions sampled from the actor.
-        actions, log_probs, alpha = self._actor(states, sample=True)
+        actions, log_probs = self._actor(states, sample=True)
+        alpha = tf.math.exp(self._log_alpha)
         return tf.minimum(
-            self._target_critic1([states, actions]) - alpha * log_probs,
-            self._target_critic2([states, actions]) - alpha * log_probs
+            tf.squeeze(self._target_critic1([states, actions])) - alpha * log_probs,
+            tf.squeeze(self._target_critic2([states, actions])) - alpha * log_probs
         )
 
 
@@ -269,12 +284,11 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 batch = replay_buffer.sample(args.batch_size, np.random)
                 states, actions, rewards, dones, next_states = map(np.array, zip(*batch))
                 # Perform the training.
-                network.predict_mean_actions(next_states)
                 returns = rewards + (1 - dones) * args.gamma * network.predict_values(next_states)
                 network.train(states, actions, returns)
-
         # Periodic evaluation
         returns = [evaluate_episode() for _ in range(args.evaluate_for)]
+        print(f'Average return: {np.mean(returns)}')
 
     # Final evaluation
     while True:
