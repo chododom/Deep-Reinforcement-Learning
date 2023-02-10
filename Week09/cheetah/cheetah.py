@@ -1,4 +1,15 @@
 #!/usr/bin/env python3
+#
+# Team members:
+# Dominik Chodounský
+# Martin Lank
+# Juraj Kmec
+#
+# ReCodExIDs:
+# 882a1f6f-99a2-48df-aee6-1b62d6d0d2df
+# b503f10b-77cf-41be-a787-371a69cfa66a
+# 8c8b5f62-9f3e-4825-9966-185987537e3f
+
 import argparse
 import collections
 import os
@@ -12,8 +23,8 @@ import tensorflow_probability as tfp
 
 import wrappers
 
-tf.config.run_functions_eagerly(True)
-tf.data.experimental.enable_debug_mode()
+# tf.config.run_functions_eagerly(True)
+# tf.data.experimental.enable_debug_mode()
 
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
@@ -25,12 +36,12 @@ parser.add_argument("--threads", default=16, type=int, help="Maximum number of t
 # For these and any other arguments you add, ReCodEx will keep your default value.
 parser.add_argument("--batch_size", default=256, type=int, help="Batch size.")
 parser.add_argument("--envs", default=12, type=int, help="Environments.")
-parser.add_argument("--evaluate_each", default=5000, type=int, help="Evaluate each number of updates.")
+parser.add_argument("--evaluate_each", default=1000, type=int, help="Evaluate each number of updates.")
 parser.add_argument("--evaluate_for", default=10, type=int, help="Evaluate the given number of episodes.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
 parser.add_argument("--hidden_layer_size", default=256, type=int, help="Size of hidden layer.")
 parser.add_argument("--learning_rate", default=0.0003, type=float, help="Learning rate.")
-parser.add_argument("--model_path", default="walker.model", type=str, help="Model path")
+parser.add_argument("--model_path", default="cheetah.model", type=str, help="Model path")
 parser.add_argument("--replay_buffer_size", default=1_000_000, type=int, help="Replay buffer size")
 parser.add_argument("--target_entropy", default=-1, type=float, help="Target entropy per action component.")
 parser.add_argument("--target_tau", default=0.005, type=float, help="Target network update weight.")
@@ -220,7 +231,7 @@ class Network:
         return self._actor(states, sample=True)[0]
 
     @wrappers.typed_np_function(np.float32)
-    # @wrappers.raw_tf_function(dynamic_dims=1)
+    @wrappers.raw_tf_function(dynamic_dims=1)
     def predict_values(self, states: np.ndarray) -> np.ndarray:
         # Produce the predicted returns, which are the minimum of
         #    target_critic(s, a) - alpha * log_prob
@@ -267,6 +278,7 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
     Transition = collections.namedtuple("Transition", ["state", "action", "reward", "done", "next_state"])
 
     state, training = venv.reset(seed=args.seed)[0], True
+    current_best = -np.inf
     while training:
         for _ in range(args.evaluate_each):
             # Predict actions by calling `network.predict_sampled_actions`.
@@ -287,8 +299,13 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
                 returns = rewards + (1 - dones) * args.gamma * network.predict_values(next_states)
                 network.train(states, actions, returns)
         # Periodic evaluation
-        returns = [evaluate_episode() for _ in range(args.evaluate_for)]
-        print(f'Average return: {np.mean(returns)}')
+        scores = [evaluate_episode() for _ in range(args.evaluate_for)]
+        score = np.mean(scores)
+        print(f'Average return: {score}')
+        if score > 1000 and score > current_best:
+            current_best = score
+            network.save_actor(args.model_path)
+            print(f'Saved model at "{args.model_path}".')
 
     # Final evaluation
     while True:
