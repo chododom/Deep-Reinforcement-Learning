@@ -36,12 +36,13 @@ parser.add_argument("--threads", default=16, type=int, help="Maximum number of t
 # For these and any other arguments you add, ReCodEx will keep your default value.
 parser.add_argument("--batch_size", default=256, type=int, help="Batch size.")
 parser.add_argument("--envs", default=12, type=int, help="Environments.")
-parser.add_argument("--evaluate_each", default=1000, type=int, help="Evaluate each number of updates.")
+parser.add_argument("--evaluate_each", default=5000, type=int, help="Evaluate each number of updates.")
 parser.add_argument("--evaluate_for", default=10, type=int, help="Evaluate the given number of episodes.")
 parser.add_argument("--gamma", default=0.99, type=float, help="Discounting factor.")
-parser.add_argument("--hidden_layer_size", default=256, type=int, help="Size of hidden layer.")
-parser.add_argument("--learning_rate", default=0.0003, type=float, help="Learning rate.")
-parser.add_argument("--model_path", default="cheetah.model", type=str, help="Model path")
+parser.add_argument("--hidden_layer_size", default=512, type=int, help="Size of hidden layer.")
+parser.add_argument("--learning_rate", default=0.0001, type=float, help="Learning rate.")
+parser.add_argument("--model_path", default="cheetah_8252.model", type=str, help="Model path")
+parser.add_argument("--resume_training_path", default=None, type=str, help="Model path")
 parser.add_argument("--replay_buffer_size", default=1_000_000, type=int, help="Replay buffer size")
 parser.add_argument("--target_entropy", default=-1, type=float, help="Target entropy per action component.")
 parser.add_argument("--target_tau", default=0.005, type=float, help="Target network update weight.")
@@ -164,6 +165,10 @@ class Network:
         self.predict_mean_actions([env.observation_space.sample()])
         self._actor.load_weights(path)
 
+    def touch_actor(self):
+        for var in self._actor.trainable_weights:
+            var.assign(np.random.normal(1, 0.001) * var)
+
     @wrappers.typed_np_function(np.float32, np.float32, np.float32)
     @wrappers.raw_tf_function(dynamic_dims=1)
     def train(self, states: np.ndarray, actions: np.ndarray, returns: np.ndarray) -> None:
@@ -269,6 +274,8 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         network.load_actor(args.model_path, env)
         while True:
             evaluate_episode(True)
+    if args.resume_training_path:
+        network.load_actor(args.resume_training_path, env)
 
     # Create the asynchroneous vector environment for training.
     venv = gym.vector.make(args.env, args.envs, asynchronous=True)
@@ -302,10 +309,10 @@ def main(env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
         scores = [evaluate_episode() for _ in range(args.evaluate_for)]
         score = np.mean(scores)
         print(f'Average return: {score}')
-        if score > 1000 and score > current_best:
-            current_best = score
-            network.save_actor(args.model_path)
-            print(f'Saved model at "{args.model_path}".')
+        if score > 8000:
+            model_path = args.model_path + f'_{int(score)}'
+            network.save_actor(model_path)
+            print(f'Saved model at "{model_path}".')
 
     # Final evaluation
     while True:
