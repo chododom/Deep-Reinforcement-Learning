@@ -127,7 +127,6 @@ class Network:
             grads = tape.gradient(loss, self._agent.trainable_variables)
             self._agent.optimizer.apply_gradients(zip(grads, self._agent.trainable_weights))
 
-
     def train(self, episodes):
         # Given a list of episodes, prepare the arguments
         # of the self._train method, and execute it.

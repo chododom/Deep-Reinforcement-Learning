@@ -11,6 +11,7 @@
 # 8c8b5f62-9f3e-4825-9966-185987537e3f
 import argparse
 import os
+
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Report only TF errors by default
 
 import gym
@@ -20,23 +21,40 @@ import tensorflow as tf
 import memory_game_environment
 import wrappers
 
+# tf.config.run_functions_eagerly(True)
+# tf.data.experimental.enable_debug_mode()
+
 parser = argparse.ArgumentParser()
 # These arguments will be set appropriately by ReCodEx, even if you change them.
 parser.add_argument("--cards", default=4, type=int, help="Number of cards in the memory game.")
 parser.add_argument("--recodex", default=False, action="store_true", help="Running in ReCodEx")
 parser.add_argument("--render_each", default=0, type=int, help="Render some episodes.")
 parser.add_argument("--seed", default=None, type=int, help="Random seed.")
-parser.add_argument("--threads", default=1, type=int, help="Maximum number of threads to use.")
+parser.add_argument("--threads", default=16, type=int, help="Maximum number of threads to use.")
 # If you add more arguments, ReCodEx will keep them with your default values.
 parser.add_argument("--batch_size", default=16, type=int, help="Number of episodes to train on.")
 parser.add_argument("--gradient_clipping", default=1.0, type=float, help="Gradient clipping.")
 parser.add_argument("--entropy_regularization", default=0.1, type=float, help="Entropy regularization weight.")
-parser.add_argument("--evaluate_each", default=None, type=int, help="Evaluate each number of episodes.")
-parser.add_argument("--evaluate_for", default=None, type=int, help="Evaluate for number of episodes.")
+parser.add_argument("--evaluate_each", default=1024, type=int, help="Evaluate each number of episodes.")
+parser.add_argument("--evaluate_for", default=100, type=int, help="Evaluate for number of episodes.")
 parser.add_argument("--hidden_layer", default=None, type=int, help="Hidden layer size; default 8*`cards`")
 parser.add_argument("--memory_cells", default=None, type=int, help="Number of memory cells; default 2*`cards`")
 parser.add_argument("--memory_cell_size", default=None, type=int, help="Memory cell size; default 3/2*`cards`")
 parser.add_argument("--replay_buffer", default=None, type=int, help="Max replay buffer size; default batch_size")
+
+
+def masked_sparse_categorical_crossentropy(y_true, y_pred, mask, sample_weight=None):
+    y_true = tf.boolean_mask(y_true, mask)
+    y_pred = tf.boolean_mask(y_pred, mask)
+    sample_weight = tf.boolean_mask(sample_weight, mask)
+    return tf.keras.losses.SparseCategoricalCrossentropy()(y_true, y_pred, sample_weight=sample_weight)
+
+
+def masked_categorical_crossentropy(y_true, y_pred, mask):
+    y_true = tf.boolean_mask(y_true, mask)
+    y_pred = tf.boolean_mask(y_pred, mask)
+    return tf.keras.losses.CategoricalCrossentropy()(y_true, y_pred)
+
 
 class Network:
     def __init__(self, env: wrappers.EvaluationEnv, args: argparse.Namespace) -> None:
@@ -53,39 +71,52 @@ class Network:
         encoded_input = tf.keras.layers.Concatenate()(
             [tf.one_hot(state[:, i], dim) for i, dim in enumerate(env.observation_space.nvec)])
 
-        # TODO(memory_game): Generate a read key for memory read from the encoded input, by using
+        # Generate a read key for memory read from the encoded input, by using
         # a ReLU hidden layer of size `args.hidden_layer` followed by a dense layer
         # with `args.memory_cell_size` units and `tanh` activation (to keep the memory
         # content in limited range).
+        x = tf.keras.layers.Dense(args.hidden_layer, activation='relu')(encoded_input)
+        read_key = tf.keras.layers.Dense(args.memory_cell_size, activation='tanh')(x)
 
-        # TODO(memory_game): Read the memory using the generated read key. Notably, compute cosine
+        # Read the memory using the generated read key. Notably, compute cosine
         # similarity of the key and every memory row, apply softmax to generate
         # a weight distribution over the rows, and finally take a weighted average of
         # the memory rows.
+        normalized_memory = tf.math.l2_normalize(memory, axis=-1)
+        normalized_read_keys = tf.math.l2_normalize(read_key, axis=-1)
+        matvec = tf.linalg.matvec(normalized_memory, normalized_read_keys)
+        softmax = tf.nn.softmax(matvec, axis=-1)
+        read_value = tf.linalg.matvec(memory, softmax, transpose_a=True)
 
-        # TODO(memory_game): Using concatenated encoded input and the read value, use a ReLU hidden
+        # Using concatenated encoded input and the read value, use a ReLU hidden
         # layer of size `args.hidden_layer` followed by a dense layer with
         # `env.action_space.n` units and `softmax` activation to produce a policy.
+        policy = tf.keras.layers.Concatenate(axis=1)([encoded_input, read_value])
+        policy = tf.keras.layers.Dense(args.hidden_layer, activation='relu')(policy)
+        policy = tf.keras.layers.Dense(env.action_space.n, activation='softmax')(policy)
+        policy = tf.squeeze(policy)  # QOL when calling with batch_size of 1.
 
-        # TODO(memory_game): Perform memory write. For faster convergence, append directly
+        # Perform memory write. For faster convergence, append directly
         # the `encoded_input` to the memory, i.e., add it as a first memory row, and drop
         # the last memory row to keep memory size constant.
+        updated_memory = tf.concat([tf.expand_dims(encoded_input, 1), memory[:, :-1]], axis=1)
+        updated_memory = tf.squeeze(updated_memory)  # To avoid adding extra dimension when batch_size = 1
 
         # Create the agent
         self._agent = tf.keras.Model(inputs=[memory, state], outputs=[updated_memory, policy])
         self._agent.compile(
             optimizer=tf.optimizers.Adam(clipnorm=args.gradient_clipping),
-            loss=tf.losses.SparseCategoricalCrossentropy(),
+            loss=masked_sparse_categorical_crossentropy,
         )
 
     def zero_memory(self):
-        # TODO(memory_game): Return an empty memory. It should be a TF tensor
+        # Return an empty memory. It should be a TF tensor
         # with shape `[self.args.memory_cells, self.args.memory_cell_size]`.
-        raise NotImplementedError()
+        return tf.zeros(shape=[self.args.memory_cells, self.args.memory_cell_size])
 
     @tf.function
-    def _train(self, states, actions, returns):
-        # TODO: Train the network given a batch of sequences of `states`
+    def _train(self, states, actions, returns, episode_lengths, max_length):
+        # Train the network given a batch of sequences of `states`
         # (each being a (card, symbol) pair), sampled `actions` and observed `returns`.
         # Specifically, start with a batch of empty memories, and run the agent
         # sequentially as many times as necessary, using `actions` as actions.
@@ -99,12 +130,52 @@ class Network:
         # Note that the sequences can be of different length, so you need to pad them
         # to same length and then somehow indicate the length of the individual episodes
         # (one possibility is to add another parameter to `_train`).
-        raise NotImplementedError()
+        batch_size = len(states)
+        memory = tf.stack([self.zero_memory() for _ in range(batch_size)])
+        baseline = tf.reduce_mean(returns[:, 0])
+        momentum = 0.01
+        for step in range(max_length):
+            state = states[:, step]
+            action = actions[:, step]
+            return_ = returns[:, step]
+            mask = step < episode_lengths
+            baseline_t = tf.reduce_mean(tf.boolean_mask(returns[:, step], mask))
+            baseline = (1 - momentum) * baseline_t + momentum * baseline
+            # baseline = momentum * baseline_t + (1 - momentum) * baseline
+            with tf.GradientTape() as tape:
+                memory, policy = self._agent([memory, state])
+                reinforce_loss = self._agent.loss(action, policy, mask, sample_weight=return_ - baseline)
+                entropy_loss = masked_categorical_crossentropy(policy, policy, mask)
+                loss = reinforce_loss - self.args.entropy_regularization * entropy_loss
+            grads = tape.gradient(loss, self._agent.trainable_variables)
+            self._agent.optimizer.apply_gradients(zip(grads, self._agent.trainable_weights))
 
     def train(self, episodes):
-        # TODO: Given a list of episodes, prepare the arguments
+        # Given a list of episodes, prepare the arguments
         # of the self._train method, and execute it.
-        raise NotImplementedError()
+        state_batches, action_batches, return_batches, episode_lengths = [], [], [], [len(e) - 1 for e in episodes]
+        max_len = max(episode_lengths)
+
+        for e in episodes:
+            states, actions, returns = [], [], []
+            for step in range(max_len):
+                if step < len(e) - 1:  # Last action is None.
+                    states.append(e[step][0])
+                    actions.append(e[step][1])
+                    returns.append(e[step][2])
+                else:
+                    states.append([-1, -1])
+                    actions.append(-1)
+                    returns.append(-1)
+            state_batches.append(states)
+            action_batches.append(actions)
+            return_batches.append(returns)
+
+        self._train(np.array(state_batches),
+                    np.array(action_batches),
+                    np.array(return_batches),
+                    np.array(episode_lengths),
+                    max_len)
 
     @wrappers.typed_np_function(np.float32, np.int32)
     @wrappers.raw_tf_function(dynamic_dims=1)
@@ -137,8 +208,9 @@ def main(env, args):
         state, memory = env.reset(start_evaluation=start_evaluation, logging=logging)[0], network.zero_memory()
         rewards, done = 0, False
         while not done:
-            # TODO(memory_game): Find out which action to use
-            action = ...
+            # Find out which action to use
+            memory, policy = network.predict([memory], [state])
+            action = np.argmax(policy)
             state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             rewards += reward
@@ -152,16 +224,23 @@ def main(env, args):
         for _ in range(args.evaluate_each):
             state, memory, episode, done = env.reset()[0], network.zero_memory(), [], False
             while not done:
-                # TODO: Choose an action according to the generated distribution.
-                action = None
-
+                # Choose an action according to the generated distribution.
+                memory, policy = network.predict([memory], [state])
+                action = np.random.choice(env.action_space.n, p=policy)
                 next_state, reward, terminated, truncated, _ = env.step(action)
                 done = terminated or truncated
                 episode.append([state, action, reward])
                 state = next_state
 
-            # TODO: In the `episode`, compute returns from the rewards.
-
+            # In the `episode`, compute returns from the rewards.
+            # From the REINFORCE assignment.
+            rewards = [t[2] for t in episode]
+            gamma_exp = np.arange(len(rewards))[::-1]
+            gammas = [0.99 ** gamma_exp[i] for i in range(len(rewards))]
+            returns = [np.sum([gammas[k] * rewards[k] for k in range(t, len(rewards))]) for t in range(len(rewards))]
+            for i, t in enumerate(episode):
+                # Rewrite the reward with return.
+                t[2] = returns[i]
             replay_buffer.append(episode)
 
             # Train the network if enough data is available
@@ -170,6 +249,9 @@ def main(env, args):
 
         # Periodic evaluation
         returns = [evaluate_episode() for _ in range(args.evaluate_for)]
+        # if np.mean(returns) - 1 * np.std(returns) > 0:
+        if np.mean(returns) > 1:
+                training = False
 
     # Final evaluation
     while True:
